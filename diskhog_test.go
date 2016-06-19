@@ -12,11 +12,6 @@ import (
 const theFile = "testfile.txt"
 const theText = "backmeup susie"
 
-func TestThings(t *testing.T) {
-	x := Pony("rr")
-	assert.Equal(t, x, "rr", "should be intact")
-}
-
 func TestCopyFile(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
