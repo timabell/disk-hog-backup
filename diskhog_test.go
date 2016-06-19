@@ -5,8 +5,8 @@ import (
 )
 
 func TestThings(t *testing.T) {
-}
-
-func TestFailit(t *testing.T) {
-	t.Errorf("doh")
+	x := Pony("rr")
+	if x != "rr" {
+		t.Errorf("pony didn't return rr got %v", x)
+	}
 }
