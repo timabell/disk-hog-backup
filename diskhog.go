@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -19,17 +20,30 @@ func backup(source string, dest string) {
 	}
 	fmt.Printf("contents %#v\n", contents)
 	for _, item := range contents {
-		fmt.Printf("item: %v\n", item)
+		itemPath := filepath.Join(source, item.Name())
 		destFile := filepath.Join(dest, item.Name())
-		copyFile(item, destFile)
+		copyFile(itemPath, destFile)
 	}
 }
 
-func copyFile(sourceFile os.FileInfo, dest string) {
-	fmt.Printf("copying to : %v\n", dest)
+func copyFile(source string, dest string) {
+	fmt.Printf("copying %v to : %v\n", source, dest)
+
+	srcFile, err := os.Open(source)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer srcFile.Close()
+
 	destFile, err := os.Create(dest)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer destFile.Close()
+
+	bytesWritten, err := io.Copy(destFile, srcFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%v bytes copied", bytesWritten)
 }

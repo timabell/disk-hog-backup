@@ -25,7 +25,8 @@ func TestCopyFile(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	assert.Equal(t, theText, backupContents, "file contents should be copied to backup folder")
+	backedUpString := string(backupContents)
+	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
 }
 
 func createSource() (source string) {
