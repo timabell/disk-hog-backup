@@ -1,12 +1,11 @@
 package main
 
 import (
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
 func TestThings(t *testing.T) {
 	x := Pony("rr")
-	if x != "rr" {
-		t.Errorf("pony didn't return rr got %v", x)
-	}
+	assert.Equal(t, x, "rr", "should be intact")
 }
