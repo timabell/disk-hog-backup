@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+const theFile = "testfile.txt"
+const theText = "backmeup susie"
+
 func TestThings(t *testing.T) {
 	x := Pony("rr")
 	assert.Equal(t, x, "rr", "should be intact")
@@ -19,12 +22,19 @@ func TestCopyFile(t *testing.T) {
 	defer os.RemoveAll(source)
 	dest := createTmpFolder()
 	defer os.RemoveAll(dest)
+
+	destFileName := filepath.Join(dest, theFile)
+	backupContents, err := ioutil.ReadFile(destFileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	assert.Equal(t, theText, backupContents, "file contents should be copied to backup folder")
 }
 
 func createSource() (source string) {
 	source = createTmpFolder()
 	testFileName := filepath.Join(source, "testfile.txt")
-	contents := []byte("backmeup susie")
+	contents := []byte(theText)
 	if err := ioutil.WriteFile(testFileName, contents, 0666); err != nil {
 		log.Fatal(err)
 	}
