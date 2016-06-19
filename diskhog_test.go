@@ -15,14 +15,19 @@ func TestThings(t *testing.T) {
 }
 
 func TestCopyFile(t *testing.T) {
+	source := createSource()
+	defer os.RemoveAll(source)
+}
+
+func createSource() (source string) {
 	source, err := ioutil.TempDir("", "dhb")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer os.RemoveAll(source)
 	testFileName := filepath.Join(source, "testfile.txt")
 	contents := []byte("backmeup susie")
 	if err := ioutil.WriteFile(testFileName, contents, 0666); err != nil {
 		log.Fatal(err)
 	}
+	return source
 }
