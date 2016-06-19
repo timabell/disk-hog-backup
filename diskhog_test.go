@@ -18,6 +18,8 @@ func TestCopyFile(t *testing.T) {
 	dest := createTmpFolder()
 	defer os.RemoveAll(dest)
 
+	backup(source, dest)
+
 	destFileName := filepath.Join(dest, theFile)
 	backupContents, err := ioutil.ReadFile(destFileName)
 	if err != nil {
