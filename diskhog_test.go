@@ -16,7 +16,7 @@ const emptyFolder = "NothingInHere"
 func TestCopy(t *testing.T) {
 	source := createSource()
 	// defer os.RemoveAll(source)
-	dest := createTmpFolder()
+	dest := createTmpFolder("backups")
 	// defer os.RemoveAll(dest)
 
 	backup(source, dest)
@@ -41,7 +41,7 @@ func CheckEmptyFolderCopied(t *testing.T, dest string) {
 }
 
 func createSource() (source string) {
-	source = createTmpFolder()
+	source = createTmpFolder("orig")
 
 	testFileName := filepath.Join(source, "testfile.txt")
 	contents := []byte(theText)
@@ -55,8 +55,8 @@ func createSource() (source string) {
 	return source
 }
 
-func createTmpFolder() (newFolder string) {
-	newFolder, err := ioutil.TempDir("", "dhb")
+func createTmpFolder(prefix string) (newFolder string) {
+	newFolder, err := ioutil.TempDir("", "dhb-"+prefix+"-")
 	if err != nil {
 		log.Fatal(err)
 	}
