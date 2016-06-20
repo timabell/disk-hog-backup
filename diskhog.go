@@ -45,5 +45,5 @@ func copyFile(source string, dest string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%v bytes copied", bytesWritten)
+	fmt.Printf("%v bytes copied\n", bytesWritten)
 }
