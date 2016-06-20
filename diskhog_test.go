@@ -11,8 +11,9 @@ import (
 
 const theFile = "testfile.txt"
 const theText = "backmeup susie"
+const emptyFolder = "NothingInHere"
 
-func TestCopyFile(t *testing.T) {
+func TestCopy(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
 	dest := createTmpFolder()
@@ -20,6 +21,11 @@ func TestCopyFile(t *testing.T) {
 
 	backup(source, dest)
 
+	CheckFileCopied(t, dest)
+	CheckEmptyFolderCopied(t, dest)
+}
+
+func CheckFileCopied(t *testing.T, dest string) {
 	destFileName := filepath.Join(dest, theFile)
 	backupContents, err := ioutil.ReadFile(destFileName)
 	if err != nil {
@@ -29,6 +35,13 @@ func TestCopyFile(t *testing.T) {
 	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
 }
 
+func CheckEmptyFolderCopied(t *testing.T, dest string) {
+	dirPath := filepath.Join(dest, emptyFolder)
+	dir, err := ioutil.ReadDir(dirPath)
+	assert.NoError(t, err, "empty folder should be copied")
+	assert.Equal(t, 0, len(dir), "empty folder in source should be empty in backup")
+}
+
 func createSource() (source string) {
 	source = createTmpFolder()
 	testFileName := filepath.Join(source, "testfile.txt")
@@ -36,6 +49,10 @@ func createSource() (source string) {
 	if err := ioutil.WriteFile(testFileName, contents, 0666); err != nil {
 		log.Fatal(err)
 	}
+
+	emptyFolderPath := filepath.Join(source, emptyFolder)
+	os.Mkdir(emptyFolderPath, 0666)
+
 	return source
 }
 
