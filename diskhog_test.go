@@ -28,9 +28,7 @@ func TestCopy(t *testing.T) {
 func CheckFileCopied(t *testing.T, dest string) {
 	destFileName := filepath.Join(dest, theFile)
 	backupContents, err := ioutil.ReadFile(destFileName)
-	if err != nil {
-		log.Fatal(err)
-	}
+	assert.NoError(t, err, "failed to read file from backup folder")
 	backedUpString := string(backupContents)
 	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
 }
@@ -44,6 +42,7 @@ func CheckEmptyFolderCopied(t *testing.T, dest string) {
 
 func createSource() (source string) {
 	source = createTmpFolder()
+
 	testFileName := filepath.Join(source, "testfile.txt")
 	contents := []byte(theText)
 	if err := ioutil.WriteFile(testFileName, contents, 0666); err != nil {
