@@ -18,7 +18,7 @@ func backup(source string, dest string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("contents %#v\n", contents)
+
 	for _, item := range contents {
 		itemPath := filepath.Join(source, item.Name())
 		destFile := filepath.Join(dest, item.Name())
