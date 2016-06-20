@@ -21,9 +21,18 @@ func backup(source string, dest string) {
 
 	for _, item := range contents {
 		itemPath := filepath.Join(source, item.Name())
+		if item.IsDir() {
+			copyFolder(item, dest)
+			continue
+		}
 		destFile := filepath.Join(dest, item.Name())
 		copyFile(itemPath, destFile)
 	}
+}
+
+func copyFolder(folder os.FileInfo, dest string) {
+	destFolder := filepath.Join(dest, folder.Name())
+	os.Mkdir(destFolder, 0666)
 }
 
 func copyFile(source string, dest string) {
