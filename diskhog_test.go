@@ -15,9 +15,9 @@ const emptyFolder = "NothingInHere"
 
 func TestCopy(t *testing.T) {
 	source := createSource()
-	defer os.RemoveAll(source)
+	// defer os.RemoveAll(source)
 	dest := createTmpFolder()
-	defer os.RemoveAll(dest)
+	// defer os.RemoveAll(dest)
 
 	backup(source, dest)
 
