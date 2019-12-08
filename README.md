@@ -1,19 +1,21 @@
-# disk-hog-backup
+# Disk Hog Backup
+
+Intelligent backups to external disk.
 
 The intention is to have a program that will make optimal use of an external
 hdd, keeping as much history as possible within the given space; requiring
 minimal user intervention.
 
 Doesn't even work yet. Almost guaranteed to eat all your data currently. Use at
-own risk. Make backups for running this anywhere.
+own risk. Make backups before running this anywhere.
 
-# inspiration
+# Inspiration
 
 * http://www.mikerubel.org/computers/rsync_snapshots/
 * http://rsnapshot.org/
 * rsync --link-dest hardlink to files in DIR when unchanged
 
-# idea
+# Idea
 
 * backup to hotpluggable encrypted compressed external hdd
 * use rsnapshot style readable normal folders with hardlinks to use less space
@@ -21,7 +23,7 @@ own risk. Make backups for running this anywhere.
 * spot problems by making changes more visible
 * keep as much as possible within the limits of the available disk space
 
-# plan
+# Plan
 
 golang
 
@@ -36,7 +38,7 @@ golang
       * find the least desirable backup, remove the whole thing in one go
       * continue if enough space else loop
 
-# todo
+# Todo
 
 * automount/unmount external disk for safe removal when not in use - autofs
 * disk encryption - luks
@@ -55,6 +57,6 @@ golang
 * report on primary backup size vs total disk size
 * report on available history (simply list dated folders)
 
-# stuff
+# Coding Resources for the future
 
-* polling filesystem thing https://github.com/npat-efault/poller
+* Polling filesystem library https://github.com/npat-efault/poller
