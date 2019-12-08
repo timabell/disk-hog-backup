@@ -21,11 +21,11 @@ func TestCopy(t *testing.T) {
 
 	Backup(source, dest)
 
-	CheckFileCopied(t, dest)
-	CheckEmptyFolderCopied(t, dest)
+	checkFileCopied(t, dest)
+	checkEmptyFolderCopied(t, dest)
 }
 
-func CheckFileCopied(t *testing.T, dest string) {
+func checkFileCopied(t *testing.T, dest string) {
 	destFileName := filepath.Join(dest, theFile)
 	backupContents, err := ioutil.ReadFile(destFileName)
 	assert.NoError(t, err, "failed to read file from backup folder")
@@ -33,7 +33,7 @@ func CheckFileCopied(t *testing.T, dest string) {
 	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
 }
 
-func CheckEmptyFolderCopied(t *testing.T, dest string) {
+func checkEmptyFolderCopied(t *testing.T, dest string) {
 	dirPath := filepath.Join(dest, emptyFolder)
 	dir, err := ioutil.ReadDir(dirPath)
 	assert.NoError(t, err, "empty folder should be copied")
