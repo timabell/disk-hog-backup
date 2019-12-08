@@ -19,7 +19,7 @@ func TestCopy(t *testing.T) {
 	dest := createTmpFolder("backups")
 	// defer os.RemoveAll(dest)
 
-	backup(source, dest)
+	Backup(source, dest)
 
 	CheckFileCopied(t, dest)
 	CheckEmptyFolderCopied(t, dest)

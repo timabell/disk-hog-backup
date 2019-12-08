@@ -12,7 +12,7 @@ import (
 func main() {
 }
 
-func backup(source string, dest string) {
+func Backup(source string, dest string) {
 	fmt.Printf("backing up %v into %v\n", source, dest)
 	contents, err := ioutil.ReadDir(source)
 	if err != nil {
