@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io"
+	"github.com/timabell/disk-hog-backup/dhcopy"
 	"io/ioutil"
 	"log"
 	"os"
@@ -26,33 +26,11 @@ func Backup(source string, dest string) {
 			continue
 		}
 		destFile := filepath.Join(dest, item.Name())
-		copyFile(itemPath, destFile)
+		dhcopy.CopyFile(itemPath, destFile)
 	}
 }
 
 func copyFolder(folder os.FileInfo, dest string) {
 	destFolder := filepath.Join(dest, folder.Name())
 	os.Mkdir(destFolder, 0666)
-}
-
-func copyFile(source string, dest string) {
-	fmt.Printf("copying %v to : %v\n", source, dest)
-
-	srcFile, err := os.Open(source)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer srcFile.Close()
-
-	destFile, err := os.Create(dest)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer destFile.Close()
-
-	bytesWritten, err := io.Copy(destFile, srcFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("%v bytes copied\n", bytesWritten)
 }
