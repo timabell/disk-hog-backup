@@ -7,7 +7,7 @@ hdd, keeping as much history as possible within the given space; requiring
 minimal user intervention.
 
 Doesn't even work yet. Almost guaranteed to eat all your data currently. Use at
-own risk. Make backups before running this anywhere.
+own risk. Make backups before running this anywhere (irony alert).
 
 # Inspiration
 
