@@ -30,7 +30,3 @@ func Backup(source string, dest string) {
 	}
 }
 
-func copyFolder(folder os.FileInfo, dest string) {
-	destFolder := filepath.Join(dest, folder.Name())
-	os.Mkdir(destFolder, 0666)
-}

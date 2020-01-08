@@ -7,7 +7,7 @@ import (
 )
 
 func CopyFile(source string, dest string) {
-	log.Printf("copying %v to : %v\n", source, dest)
+	log.Printf("copying file %v to : %v\n", source, dest)
 
 	srcFile, err := os.Open(source)
 	if err != nil {
