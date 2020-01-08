@@ -2,6 +2,7 @@ package dhcopy
 
 import (
 	"github.com/stretchr/testify/assert"
+	"github.com/timabell/disk-hog-backup/test_helpers"
 	"io/ioutil"
 	"log"
 	"os"
@@ -13,9 +14,9 @@ const theFile = "testfile.txt"
 const theText = "backmeup susie"
 
 func TestCopy(t *testing.T) {
-	sourceFolder := createTmpFolder("orig")
+	sourceFolder := test_helpers.CreateTmpFolder("orig")
 	defer os.RemoveAll(sourceFolder)
-	dest := createTmpFolder("backups")
+	dest := test_helpers.CreateTmpFolder("backups")
 	defer os.RemoveAll(dest)
 
 	sourceFileName := filepath.Join(sourceFolder, theFile)
@@ -37,12 +38,4 @@ func checkFileCopied(t *testing.T, dest string) {
 	assert.NoError(t, err, "failed to read file from backup folder")
 	backedUpString := string(backupContents)
 	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
-}
-
-func createTmpFolder(prefix string) (newFolder string) {
-	newFolder, err := ioutil.TempDir("", "dhb-"+prefix+"-")
-	if err != nil {
-		log.Fatal(err)
-	}
-	return newFolder
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/stretchr/testify/assert"
+	"github.com/timabell/disk-hog-backup/test_helpers"
 	"io/ioutil"
 	"log"
 	"os"
@@ -9,28 +10,18 @@ import (
 	"testing"
 )
 
-const theFile = "testfile.txt"
 const theText = "backmeup susie"
 const emptyFolder = "NothingInHere"
 
 func TestCopy(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
-	dest := createTmpFolder("backups")
+	dest := test_helpers.CreateTmpFolder("backups")
 	defer os.RemoveAll(dest)
 
 	Backup(source, dest)
 
-	checkFileCopied(t, dest)
 	checkEmptyFolderCopied(t, dest)
-}
-
-func checkFileCopied(t *testing.T, dest string) {
-	destFileName := filepath.Join(dest, theFile)
-	backupContents, err := ioutil.ReadFile(destFileName)
-	assert.NoError(t, err, "failed to read file from backup folder")
-	backedUpString := string(backupContents)
-	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
 }
 
 func checkEmptyFolderCopied(t *testing.T, dest string) {
@@ -41,7 +32,7 @@ func checkEmptyFolderCopied(t *testing.T, dest string) {
 }
 
 func createSource() (source string) {
-	source = createTmpFolder("orig")
+	source = test_helpers.CreateTmpFolder("orig")
 
 	testFileName := filepath.Join(source, "testfile.txt")
 	contents := []byte(theText)
@@ -55,10 +46,3 @@ func createSource() (source string) {
 	return source
 }
 
-func createTmpFolder(prefix string) (newFolder string) {
-	newFolder, err := ioutil.TempDir("", "dhb-"+prefix+"-")
-	if err != nil {
-		log.Fatal(err)
-	}
-	return newFolder
-}
