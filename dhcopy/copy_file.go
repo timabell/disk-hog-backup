@@ -1,14 +1,13 @@
 package dhcopy
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"os"
 )
 
 func CopyFile(source string, dest string) {
-	fmt.Printf("copying %v to : %v\n", source, dest)
+	log.Printf("copying %v to : %v\n", source, dest)
 
 	srcFile, err := os.Open(source)
 	if err != nil {
@@ -26,5 +25,5 @@ func CopyFile(source string, dest string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%v bytes copied\n", bytesWritten)
+	log.Printf("%v bytes copied\n", bytesWritten)
 }
