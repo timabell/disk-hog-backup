@@ -5,7 +5,6 @@ import (
 	"github.com/timabell/disk-hog-backup/dhcopy"
 	"io/ioutil"
 	"log"
-	"os"
 	"path/filepath"
 )
 
@@ -22,7 +21,7 @@ func Backup(source string, dest string) {
 	for _, item := range contents {
 		itemPath := filepath.Join(source, item.Name())
 		if item.IsDir() {
-			copyFolder(item, dest)
+			//dhcopy.CopyFolder(item, dest)
 			continue
 		}
 		destFile := filepath.Join(dest, item.Name())

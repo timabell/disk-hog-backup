@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestEntireThing(t *testing.T) {
+func TestSmokeBackupRealisticTree(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
 	dest := test_helpers.CreateTmpFolder("backups")
@@ -18,6 +18,18 @@ func TestEntireThing(t *testing.T) {
 	// smoke test
 	Backup(source, dest)
 	// todo, some simple assertions
+}
+
+func TestBackupSingleFile(t *testing.T){
+	t.Skip("todo")
+}
+
+func TestBackupEmptyFolder(t *testing.T){
+	t.Skip("todo")
+}
+
+func TestBackupNonExistentPath(t *testing.T){
+	t.Skip("todo")
 }
 
 func createSource() (source string) {
