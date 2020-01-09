@@ -18,6 +18,7 @@ func TestCopyTree(t *testing.T) {
 	dest := test_helpers.CreateTmpFolder("backups")
 	defer os.RemoveAll(dest)
 
+	// todo
 }
 
 func TestCopyEmptyFolder(t *testing.T) {
@@ -53,4 +54,3 @@ func createSource() (source string) {
 
 	return source
 }
-
