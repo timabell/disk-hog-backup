@@ -63,4 +63,4 @@ golang
 
 # Badgers
 
-![Go](https://github.com/timabell/disk-hog-backup/workflows/Go/badge.svg)
+[![Go](https://github.com/timabell/disk-hog-backup/workflows/Go/badge.svg)](https://github.com/timabell/disk-hog-backup/actions?query=workflow%3AGo)
