@@ -19,23 +19,17 @@ func TestCopy(t *testing.T) {
 	dest := test_helpers.CreateTmpFolder("backups")
 	defer os.RemoveAll(dest)
 
-	sourceFileName := filepath.Join(sourceFolder, theFile)
+	sourceFilePath := filepath.Join(sourceFolder, theFile)
 	contents := []byte(theText)
-	if err := ioutil.WriteFile(sourceFileName, contents, 0666); err != nil {
+	if err := ioutil.WriteFile(sourceFilePath, contents, 0666); err != nil {
 		log.Fatal(err)
 	}
 
-	destFileName := filepath.Join(dest, theFile)
+	destinationFilePath := filepath.Join(dest, theFile)
 
-	CopyFile(sourceFileName, destFileName)
+	CopyFile(sourceFilePath, destinationFilePath)
 
-	checkFileCopied(t, dest)
-}
-
-func checkFileCopied(t *testing.T, dest string) {
-	destFileName := filepath.Join(dest, theFile)
-	backupContents, err := ioutil.ReadFile(destFileName)
-	assert.NoError(t, err, "failed to read file from backup folder")
-	backedUpString := string(backupContents)
-	assert.Equal(t, theText, backedUpString, "file contents should be copied to backup folder")
+	contentsMatches, err := test_helpers.FileContentsMatches(sourceFilePath, destinationFilePath)
+	assert.NoError(t, err)
+	assert.True(t, contentsMatches, "file contents should be copied to backup folder")
 }

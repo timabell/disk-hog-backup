@@ -4,27 +4,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/timabell/disk-hog-backup/test_helpers"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 const emptyFolder = "NothingInHere"
+const backupFolderName = "backups"
 
-func TestCopyTree(t *testing.T) {
+func TestCopiesFile(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
-	dest := test_helpers.CreateTmpFolder("backups")
+	makeTestFile(source, "testfile.txt", "backmeup susie")
+	dest := test_helpers.CreateTmpFolder(backupFolderName)
 	defer os.RemoveAll(dest)
 
-	// todo
+	CopyFolder(source, dest)
 }
 
 func TestCopyEmptyFolder(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
-	dest := test_helpers.CreateTmpFolder("backups")
+
+	emptyFolderPath := filepath.Join(source, emptyFolder)
+	if err := os.MkdirAll(emptyFolderPath, os.ModePerm); err != nil {
+		panic(err)
+	}
+
+	dest := test_helpers.CreateTmpFolder(backupFolderName)
 	defer os.RemoveAll(dest)
 
 	CopyFolder(source, dest)
@@ -41,16 +48,12 @@ func checkEmptyFolderCopied(t *testing.T, dest string) {
 
 func createSource() (source string) {
 	source = test_helpers.CreateTmpFolder("orig")
-
-	const theText = "backmeup susie"
-	testFileName := filepath.Join(source, "testfile.txt")
-	contents := []byte(theText)
-	if err := ioutil.WriteFile(testFileName, contents, 0666); err != nil {
-		log.Fatal(err)
-	}
-
-	emptyFolderPath := filepath.Join(source, emptyFolder)
-	os.Mkdir(emptyFolderPath, 0666)
-
 	return source
+}
+
+func makeTestFile(folderPath string, filename string, contents string) {
+	deepTestFileName := filepath.Join(folderPath, filename)
+	if err := ioutil.WriteFile(deepTestFileName, []byte(contents), os.ModePerm); err != nil {
+		panic(err)
+	}
 }

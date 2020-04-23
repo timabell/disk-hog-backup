@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-func CopyFolder(source string, dest string) {
+func CopyFolder(source string, dest string) error {
 	log.Printf("backing up folder %v into %v\n", source, dest)
 	contents, err := ioutil.ReadDir(source)
 	if err != nil {
@@ -15,17 +15,21 @@ func CopyFolder(source string, dest string) {
 	}
 
 	for _, item := range contents {
-		//itemPath := filepath.Join(source, item.Name())
 		if item.IsDir() {
 			destFolder := filepath.Join(dest, item.Name())
-			err := os.Mkdir(destFolder, 0666)
+			err := os.Mkdir(destFolder, os.ModePerm)
 			if err != nil {
 				log.Fatal(err)
 			}
-			//CopyFolder(item, dest)
+			dirPath := filepath.Join(source, item.Name())
+			if err := CopyFolder(dirPath, destFolder); err != nil {
+				return err
+			}
 			continue
 		}
-		//destFile := filepath.Join(dest, item.Name())
-		//CopyFile(itemPath, destFile)
+		itemPath := filepath.Join(source, item.Name())
+		destFile := filepath.Join(dest, item.Name())
+		CopyFile(itemPath, destFile)
 	}
+	return nil
 }

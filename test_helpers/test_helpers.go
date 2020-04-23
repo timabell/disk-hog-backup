@@ -12,3 +12,23 @@ func CreateTmpFolder(prefix string) (newFolder string) {
 	}
 	return newFolder
 }
+
+func FileContentsMatches(file1Path string, file2Path string) (bool, error) {
+	file1Contents, err := readContents(file1Path)
+	if err != nil {
+		return false, err
+	}
+	file2Contents, err := readContents(file2Path)
+	if err != nil {
+		return false, err
+	}
+	return file1Contents == file2Contents, nil
+}
+
+func readContents(path string) (string, error) {
+	contents, err := ioutil.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(contents), nil
+}
