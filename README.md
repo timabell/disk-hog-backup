@@ -60,3 +60,7 @@ golang
 # Coding Resources for the future
 
 * Polling filesystem library https://github.com/npat-efault/poller
+
+# Badgers
+
+![Go](https://github.com/timabell/disk-hog-backup/workflows/Go/badge.svg)
