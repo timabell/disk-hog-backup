@@ -10,6 +10,7 @@ import (
 )
 
 const deepPath = "thats/deep"
+const backupFolderName = "backups"
 
 func TestBackup(t *testing.T) {
 	source := createSource()
@@ -22,12 +23,26 @@ func TestBackup(t *testing.T) {
 
 	// Just a quick check that deeply nested file is copied.
 	// All other edge cases are tested in unit tests.
-	_, err := os.Stat(filepath.Join(dest, deepPath + "/testfile.txt"))
+	_, err := os.Stat(filepath.Join(dest, deepPath+"/testfile.txt"))
 	assert.NoError(t, err)
 }
 
 func TestBackupNonExistentPath(t *testing.T) {
 	t.Skip("todo")
+}
+
+func TestCreatesDestinationFolder(t *testing.T) {
+	source := createSource()
+	defer os.RemoveAll(source)
+	dest := test_helpers.CreateTmpFolder(backupFolderName)
+	defer os.RemoveAll(dest)
+
+	nonExistentDestination := filepath.Join(dest, "to-be-created")
+
+	Backup(source, nonExistentDestination)
+
+	_, err := ioutil.ReadDir(nonExistentDestination)
+	assert.NoError(t, err, "destination folder should be copied")
 }
 
 func createSource() (source string) {
