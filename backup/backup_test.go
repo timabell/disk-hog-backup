@@ -1,4 +1,4 @@
-package backup_sets
+package backup
 
 import (
 	"github.com/stretchr/testify/assert"

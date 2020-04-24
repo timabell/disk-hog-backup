@@ -1,4 +1,4 @@
-package backup_sets
+package backup
 
 import (
 	"github.com/timabell/disk-hog-backup/backup_sets"
