@@ -47,6 +47,33 @@ func TestCreatesDestinationFolder(t *testing.T) {
 	assert.NoError(t, err, "destination folder should be copied")
 }
 
+func TestHardLinksSecondBackup(t *testing.T){
+	source := createSource()
+	defer os.RemoveAll(source)
+	const filename = "linkme.txt"
+	filePath := filepath.Join(source, filename)
+	test_helpers.MakeTestFile(filePath, "hello go")
+	dest := test_helpers.CreateTmpFolder("backups")
+	defer os.RemoveAll(dest) // comment this out to be able to inspect what we actually got
+	baseDate := time.Date(2019, 12, 31, 23, 59, 0, 0, time.UTC)
+
+	// first backup
+	setName1, err := Backup(source, dest,
+		test_helpers.FixedTime(baseDate.Add(time.Hour)))
+	assert.NoError(t, err)
+
+	// second backup
+	setName2, err := Backup(source, dest,
+		test_helpers.FixedTime(baseDate.Add(time.Hour*2)))
+	assert.NoError(t, err)
+
+	sourceFile, err := os.Stat(filepath.Join(dest, setName1, filename))
+	assert.NoError(t, err)
+	destFile, err := os.Stat(filepath.Join(dest, setName2, filename))
+	assert.NoError(t, err)
+	assert.True(t, os.SameFile(sourceFile, destFile), "files should be hard-linked (os.SameFile)")
+}
+
 func createSource() (source string) {
 	source = test_helpers.CreateTmpFolder("orig")
 

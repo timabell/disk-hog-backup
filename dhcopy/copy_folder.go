@@ -17,7 +17,7 @@ func CopyFolder(source string, dest string) error {
 	for _, item := range contents {
 		if item.IsDir() {
 			destFolder := filepath.Join(dest, item.Name())
-			err := os.Mkdir(destFolder, os.ModePerm)
+			err := os.MkdirAll(destFolder, os.ModePerm)
 			if err != nil {
 				log.Fatal(err)
 			}
