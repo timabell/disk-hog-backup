@@ -15,7 +15,7 @@ const backupFolderName = "backups"
 func TestCopiesFile(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
-	makeTestFile(source, "testfile.txt", "backmeup susie")
+	test_helpers.MakeTestFile(source, "testfile.txt", "backmeup susie")
 	dest := test_helpers.CreateTmpFolder(backupFolderName)
 	defer os.RemoveAll(dest)
 
@@ -54,11 +54,4 @@ func checkEmptyFolderCopied(t *testing.T, dest string) {
 func createSource() (source string) {
 	source = test_helpers.CreateTmpFolder("orig")
 	return source
-}
-
-func makeTestFile(folderPath string, filename string, contents string) {
-	deepTestFileName := filepath.Join(folderPath, filename)
-	if err := ioutil.WriteFile(deepTestFileName, []byte(contents), os.ModePerm); err != nil {
-		panic(err)
-	}
 }

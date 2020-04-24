@@ -3,6 +3,8 @@ package test_helpers
 import (
 	"io/ioutil"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -46,5 +48,12 @@ func TimeFixer() func() time.Time {
 func FixedTime(fixedTime time.Time) func() time.Time {
 	return func() time.Time {
 		return fixedTime
+	}
+}
+
+func MakeTestFile(folderPath string, filename string, contents string) {
+	deepTestFileName := filepath.Join(folderPath, filename)
+	if err := ioutil.WriteFile(deepTestFileName, []byte(contents), os.ModePerm); err != nil {
+		panic(err)
 	}
 }
