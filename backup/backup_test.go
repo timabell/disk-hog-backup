@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const deepPath = "thats/deep"
@@ -19,7 +20,7 @@ func TestBackup(t *testing.T) {
 	defer os.RemoveAll(dest) // comment this out to be able to inspect what we actually got
 
 	//smoke test
-	setName, err := Backup(source, dest)
+	setName, err := Backup(source, dest, time.Now)
 	assert.NoError(t, err)
 
 	// Just a quick check that deeply nested file is copied.
@@ -40,7 +41,7 @@ func TestCreatesDestinationFolder(t *testing.T) {
 
 	nonExistentDestination := filepath.Join(dest, "to-be-created")
 
-	Backup(source, nonExistentDestination)
+	Backup(source, nonExistentDestination, time.Now)
 
 	_, err := ioutil.ReadDir(nonExistentDestination)
 	assert.NoError(t, err, "destination folder should be copied")

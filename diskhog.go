@@ -4,6 +4,7 @@ import (
 	"flag"
 	"github.com/timabell/disk-hog-backup/backup"
 	"log"
+	"time"
 )
 
 var source string
@@ -13,7 +14,7 @@ func main() {
 	flag.StringVar(&source, "source", "", "source folder to back up")
 	flag.StringVar(&destination, "destination", "", "destination folder for backups")
 	flag.Parse()
-	_, err := backup.Backup(source, destination)
+	_, err := backup.Backup(source, destination, time.Now)
 	if err != nil {
 		log.Fatalf("Backup failed: %s", err)
 	}

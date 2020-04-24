@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-func Backup(source string, dest string) (setName string, err error) {
+func Backup(source string, dest string, getTime func () (time.Time)) (setName string, err error) {
 	err = os.MkdirAll(dest, os.ModePerm)
 	if err != nil {
 		log.Fatal(err)
 	}
-	setName, err = backup_sets.CreateEmptySet(dest, time.Now)
+	setName, err = backup_sets.CreateEmptySet(dest, getTime)
 	if err != nil {
 		log.Fatalf("Couldn't create set folder: %s", err)
 	}
