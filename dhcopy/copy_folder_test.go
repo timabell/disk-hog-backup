@@ -20,6 +20,11 @@ func TestCopiesFile(t *testing.T) {
 	defer os.RemoveAll(dest)
 
 	CopyFolder(source, dest)
+
+	// Just a quick check that recursion is including files.
+	// Full testing of files is is in the file copier tests.
+	_, err := os.Stat(filepath.Join(dest, "/testfile.txt"))
+	assert.NoError(t, err)
 }
 
 func TestCopyEmptyFolder(t *testing.T) {
