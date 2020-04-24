@@ -1,4 +1,4 @@
-package main
+package backup_sets
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -19,11 +19,12 @@ func TestBackup(t *testing.T) {
 	defer os.RemoveAll(dest) // comment this out to be able to inspect what we actually got
 
 	//smoke test
-	Backup(source, dest)
+	setName, err := Backup(source, dest)
+	assert.NoError(t, err)
 
 	// Just a quick check that deeply nested file is copied.
 	// All other edge cases are tested in unit tests.
-	_, err := os.Stat(filepath.Join(dest, deepPath+"/testfile.txt"))
+	_, err = os.Stat(filepath.Join(dest, setName, deepPath,"/testfile.txt"))
 	assert.NoError(t, err)
 }
 

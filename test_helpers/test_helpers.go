@@ -3,6 +3,7 @@ package test_helpers
 import (
 	"io/ioutil"
 	"log"
+	"time"
 )
 
 func CreateTmpFolder(prefix string) (newFolder string) {
@@ -31,4 +32,12 @@ func readContents(path string) (string, error) {
 		return "", err
 	}
 	return string(contents), nil
+}
+
+// returns a function that always returns the same time
+func TimeFixer() func() time.Time {
+	fixedTime := time.Now()
+	return func() time.Time {
+		return fixedTime
+	}
 }

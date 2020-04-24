@@ -2,9 +2,8 @@ package main
 
 import (
 	"flag"
-	"github.com/timabell/disk-hog-backup/dhcopy"
+	backup_sets2 "github.com/timabell/disk-hog-backup/backup"
 	"log"
-	"os"
 )
 
 var source string
@@ -14,17 +13,9 @@ func main() {
 	flag.StringVar(&source, "source", "", "source folder to back up")
 	flag.StringVar(&destination, "destination", "", "destination folder for backups")
 	flag.Parse()
-	Backup(source, destination)
+	_, err := backup_sets2.Backup(source, destination)
+	if err != nil{
+		log.Fatalf("Backup failed: %s", err)
+	}
 }
 
-func Backup(source string, dest string) error {
-	err := os.MkdirAll(dest, os.ModePerm)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("backing up %v into %v\n", source, dest)
-	if err := dhcopy.CopyFolder(source, dest); err != nil {
-		return err
-	}
-	return nil
-}
