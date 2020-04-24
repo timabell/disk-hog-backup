@@ -4,7 +4,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -51,9 +50,8 @@ func FixedTime(fixedTime time.Time) func() time.Time {
 	}
 }
 
-func MakeTestFile(folderPath string, filename string, contents string) {
-	deepTestFileName := filepath.Join(folderPath, filename)
-	if err := ioutil.WriteFile(deepTestFileName, []byte(contents), os.ModePerm); err != nil {
+func MakeTestFile(filePath string, contents string) {
+	if err := ioutil.WriteFile(filePath, []byte(contents), os.ModePerm); err != nil {
 		panic(err)
 	}
 }

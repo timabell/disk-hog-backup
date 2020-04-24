@@ -11,11 +11,21 @@ import (
 
 const emptyFolder = "NothingInHere"
 const backupFolderName = "backups"
+const deepPath = "another/level"
 
-func TestCopiesFile(t *testing.T) {
+func TestCopiesFiles(t *testing.T) {
 	source := createSource()
 	defer os.RemoveAll(source)
-	test_helpers.MakeTestFile(source, "testfile.txt", "backmeup susie")
+	const filename = "testfile.txt"
+	filePath := filepath.Join(source, filename)
+	test_helpers.MakeTestFile(filePath, "backmeup susie")
+	folderPath := filepath.Join(source, deepPath)
+	if err := os.MkdirAll(folderPath, os.ModePerm); err != nil {
+		panic(err)
+	}
+	const filename2 = "testfile2.txt"
+	deepFilePath := filepath.Join(source, deepPath, filename2)
+	test_helpers.MakeTestFile(deepFilePath, "aloha")
 	dest := test_helpers.CreateTmpFolder(backupFolderName)
 	defer os.RemoveAll(dest)
 
@@ -23,7 +33,9 @@ func TestCopiesFile(t *testing.T) {
 
 	// Just a quick check that recursion is including files.
 	// Full testing of files is is in the file copier tests.
-	_, err := os.Stat(filepath.Join(dest, "/testfile.txt"))
+	_, err := os.Stat(filepath.Join(dest, filename))
+	assert.NoError(t, err)
+	_, err = os.Stat(filepath.Join(dest, deepPath, filename2))
 	assert.NoError(t, err)
 }
 

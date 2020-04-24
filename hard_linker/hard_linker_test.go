@@ -14,7 +14,8 @@ func TestHardLinksFiles(t *testing.T) {
 	source := test_helpers.CreateTmpFolder(backupFolderName + "-src")
 	defer os.RemoveAll(source)
 	const filename = "linkme.txt"
-	test_helpers.MakeTestFile(source, filename, "hello go")
+	filePath := filepath.Join(source, filename)
+	test_helpers.MakeTestFile(filePath, "hello go")
 	dest := test_helpers.CreateTmpFolder(backupFolderName + "-dest")
 	defer os.RemoveAll(dest)
 
