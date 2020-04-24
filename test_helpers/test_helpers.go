@@ -11,6 +11,7 @@ func CreateTmpFolder(prefix string) (newFolder string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("Created test folder: %s", newFolder)
 	return newFolder
 }
 
@@ -37,6 +38,12 @@ func readContents(path string) (string, error) {
 // returns a function that always returns the same time
 func TimeFixer() func() time.Time {
 	fixedTime := time.Now()
+	return func() time.Time {
+		return fixedTime
+	}
+}
+
+func FixedTime(fixedTime time.Time) func() time.Time {
 	return func() time.Time {
 		return fixedTime
 	}

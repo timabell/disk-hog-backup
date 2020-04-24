@@ -24,7 +24,7 @@ func TestBackup(t *testing.T) {
 
 	// Just a quick check that deeply nested file is copied.
 	// All other edge cases are tested in unit tests.
-	_, err = os.Stat(filepath.Join(dest, setName, deepPath,"/testfile.txt"))
+	_, err = os.Stat(filepath.Join(dest, setName, deepPath, "/testfile.txt"))
 	assert.NoError(t, err)
 }
 

@@ -14,8 +14,7 @@ func main() {
 	flag.StringVar(&destination, "destination", "", "destination folder for backups")
 	flag.Parse()
 	_, err := backup.Backup(source, destination)
-	if err != nil{
+	if err != nil {
 		log.Fatalf("Backup failed: %s", err)
 	}
 }
-
