@@ -1,5 +1,10 @@
 # Disk Hog Backup
 
+This is far from finished, if you want something that already works take a look
+at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://github.com/bit-team/backintime))
+
+---
+
 Intelligent backups to external disk.
 
 The intention is to have a program that will make optimal use of an external
