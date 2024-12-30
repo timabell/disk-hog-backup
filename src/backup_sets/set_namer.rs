@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use std::sync::Mutex;
 
-fn generate_name<F>(get_time: F) -> String
+pub fn generate_name<F>(get_time: F) -> String
 where
     F: Fn() -> chrono::DateTime<Utc>,
 {
