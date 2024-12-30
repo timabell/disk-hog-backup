@@ -1,5 +1,4 @@
-use chrono::{TimeZone, Utc};
-use std::sync::Mutex;
+use chrono::{Datelike, TimeZone, Timelike, Utc};
 
 pub fn generate_name<F>(get_time: F) -> String
 where
