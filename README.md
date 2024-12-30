@@ -30,11 +30,8 @@ own risk. Make backups before running this anywhere (irony alert).
 
 # Plan
 
-golang
-
 * first backup
     * copy everything from source to dest - watch out for changing files
-    * spot dupes, hardlink them
 * second backup
     * hard link to old backup if same
     * spot dupes, hardlink them
