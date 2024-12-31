@@ -2,9 +2,13 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
 use chrono::{DateTime, Utc};
+use std::env;
+use rand::Rng;
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
-    let dir = std::env::temp_dir().join(format!("dhb-{}-", prefix));
+    let mut rng = rand::thread_rng();
+    let random_suffix: u32 = rng.gen();
+    let dir = env::temp_dir().join(format!("dhb-{}-{}", prefix, random_suffix));
     fs::create_dir_all(&dir)?;
     Ok(dir.to_string_lossy().into_owned())
 }
