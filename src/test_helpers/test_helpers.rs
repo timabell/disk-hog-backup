@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
-use std::time::SystemTime;
+use chrono::{DateTime, Utc};
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
     let dir = std::env::temp_dir().join(format!("dhb-{}-", prefix));
@@ -23,7 +23,7 @@ fn read_contents<P: AsRef<Path>>(path: P) -> io::Result<String> {
 }
 
 // Returns a function that always returns the same time
-pub fn time_fixer() -> impl Fn() -> SystemTime {
-    let fixed_time = SystemTime::now();
+pub fn time_fixer() -> impl Fn() -> DateTime<Utc> {
+    let fixed_time = Utc::now();
     move || fixed_time
 }

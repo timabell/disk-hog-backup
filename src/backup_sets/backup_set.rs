@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::Path;
-use std::time::SystemTime;
+use chrono::Utc;
 use crate::backup_sets::set_namer::generate_name;
 
 const BACKUP_FOLDER_NAME: &str = "backups";
 
 fn create_empty_set<F>(dest: &str, get_time: F) -> Result<String, std::io::Error>
 where
-    F: Fn() -> SystemTime,
+	F: Fn() -> chrono::DateTime<Utc>,
 {
     let set_name = generate_name(get_time);
     let dir_path = Path::new(dest).join(&set_name);
