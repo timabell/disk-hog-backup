@@ -5,7 +5,7 @@ mod test_helpers;
 
 use clap::Parser;
 use std::process;
-use crate::backup_sets::backup;
+use crate::backup::backup::backup;
 
 #[derive(Parser)]
 #[command(name = "diskhog")]
