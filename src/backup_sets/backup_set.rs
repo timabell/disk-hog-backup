@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
-use test_helpers::{create_tmp_folder, file_contents_matches, time_fixer};
+use crate::backup_sets::set_namer::generate_name;
 
 const BACKUP_FOLDER_NAME: &str = "backups";
 
@@ -20,7 +20,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
-    use test_helpers::{create_tmp_folder, time_fixer};
+	use crate::test_helpers::test_helpers::{create_tmp_folder, time_fixer};
 
     #[test]
     fn test_creation() {
