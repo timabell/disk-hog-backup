@@ -1,12 +1,10 @@
+use crate::backup_sets::backup_set::create_empty_set;
+use crate::dhcopy::copy_folder::copy_folder;
+use crate::test_helpers::test_helpers::create_tmp_folder;
+use chrono::Utc;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::SystemTime;
-use chrono::Utc;
-use crate::backup_sets::backup_set::create_empty_set;
-use crate::dhcopy::copy_folder;
-use crate::dhcopy::copy_folder::copy_folder;
-use crate::test_helpers::test_helpers::create_tmp_folder;
 
 const DEEP_PATH: &str = "thats/deep";
 const BACKUP_FOLDER_NAME: &str = "backups";
