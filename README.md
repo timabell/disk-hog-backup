@@ -7,9 +7,14 @@ at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://g
 
 Intelligent backups to external disk.
 
-The intention is to have a program that will make optimal use of an external
-hdd, keeping as much history as possible within the given space; requiring
-minimal user intervention.
+Design goals:
+
+-  Make optimal use of an external
+hdd, keeping as much history as possible within the given space.
+- Require minimal user intervention.
+- Backups are a normal filesystem of files, not requiring any special tools to
+  access.
+- Backups are verified with checksums stored alongside the backup to allow spotting any bit-rot.
 
 Doesn't even work yet. Almost guaranteed to eat all your data currently. Use at
 own risk. Make backups before running this anywhere (irony alert).
@@ -18,23 +23,21 @@ own risk. Make backups before running this anywhere (irony alert).
 
 * http://www.mikerubel.org/computers/rsync_snapshots/
 * http://rsnapshot.org/
-* rsync --link-dest hardlink to files in DIR when unchanged
+* `rsync --link-dest` hardlink to files in DIR when unchanged
+* [BackInTime](https://backintime.readthedocs.io/)
+* My own [verify/rehash scripts](https://gist.github.com/timabell/f70f34f8933b2abaf42789f8afdbd7d5)
 
 # Idea
 
 * backup to hotpluggable encrypted compressed external hdd
 * use rsnapshot style readable normal folders with hardlinks to use less space
-* use less space by spotting renamed/moved files
 * spot problems by making changes more visible
 * keep as much as possible within the limits of the available disk space
 
 # Plan
 
-golang
-
 * first backup
     * copy everything from source to dest - watch out for changing files
-    * spot dupes, hardlink them
 * second backup
     * hard link to old backup if same
     * spot dupes, hardlink them
@@ -42,6 +45,11 @@ golang
     * hardlink files till we hit an unseen thing to back up
       * find the least desirable backup, remove the whole thing in one go
       * continue if enough space else loop
+
+# Code Design
+
+* [Outside-in-tests](https://pod.0x5.uk/25)
+* Library-first - to allow this program to be driven from multiple user interfaces, the core logic shall be published as a library crate, and then the bundled CLI will use only the public interface provided by the disk-hog library crate.
 
 # Todo
 
