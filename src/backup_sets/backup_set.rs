@@ -5,7 +5,7 @@ use crate::backup_sets::set_namer::generate_name;
 
 const BACKUP_FOLDER_NAME: &str = "backups";
 
-fn create_empty_set<F>(dest: &str, get_time: F) -> Result<String, std::io::Error>
+pub fn create_empty_set<F>(dest: &str, get_time: F) -> Result<String, std::io::Error>
 where
 	F: Fn() -> chrono::DateTime<Utc>,
 {
