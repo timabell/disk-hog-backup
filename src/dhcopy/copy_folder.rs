@@ -1,9 +1,9 @@
 use std::fs;
 use std::io;
 use std::path::Path;
-use test_helpers::{create_tmp_folder, file_contents_matches};
 use std::fs::File;
 use std::io::Write;
+use crate::test_helpers::test_helpers::create_tmp_folder;
 
 const EMPTY_FOLDER: &str = "NothingInHere";
 const BACKUP_FOLDER_NAME: &str = "backups";
