@@ -13,7 +13,6 @@ const THE_TEXT: &str = "backmeup susie";
 #[test]
 fn test_copies_file() -> io::Result<()> {
     let source = create_source()?;
-    let _ = fs::remove_dir_all(&source);
     make_test_file(&source, THE_FILE, THE_TEXT)?;
     let dest = create_tmp_folder(BACKUP_FOLDER_NAME)?;
 
@@ -22,6 +21,8 @@ fn test_copies_file() -> io::Result<()> {
     let test_file_path = Path::new(&dest).join(THE_FILE);
     assert!(test_file_path.exists(), "test file should be copied to backup folder");
 
+	// cleanup
+	let _ = fs::remove_dir_all(&source);
     Ok(())
 }
 
