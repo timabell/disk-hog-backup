@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::SystemTime;
+use chrono::Utc;
 use crate::backup_sets::backup_set::create_empty_set;
 use crate::dhcopy::copy_folder;
 use crate::dhcopy::copy_folder::copy_folder;
@@ -12,7 +13,7 @@ const BACKUP_FOLDER_NAME: &str = "backups";
 
 pub fn backup(source: &str, dest: &str) -> io::Result<String> {
     fs::create_dir_all(dest)?;
-    let set_name = create_empty_set(dest, SystemTime::now)?;
+    let set_name = create_empty_set(dest, || Utc::now())?;
     let dest_folder = Path::new(dest).join(&set_name);
     println!("backing up {} into {:?}", source, dest_folder);
     copy_folder(source, dest_folder.to_str().unwrap())?;
