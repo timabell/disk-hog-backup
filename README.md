@@ -1,23 +1,28 @@
 # Disk Hog Backup
 
-This is far from finished, if you want something that already works take a look
-at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://github.com/bit-team/backintime))
-
----
-
-Intelligent backups to external disk.
-
-Design goals:
-
--  Make optimal use of an external
-hdd, keeping as much history as possible within the given space.
+- Creates backups as normal folders
+	- Because you don't want to need fancy tooling to recover your backups in a panic
+- Subsequent backups share identical files as hardlinks with previous backups
+	- Saving space without sacrificing backups as normal files and folders
+- Self-management of disk space
+	- Keeping as many files and versions as possible in the available space, intended to make best use of external USB drives.
+- No encryption
+  - Because LVM+LUKS can do that at the filesystem layer
+- Automatic checksums and validation of new and existing backups
+	- Bit-rot is real
 - Require minimal user intervention.
-- Backups are a normal filesystem of files, not requiring any special tools to
-  access.
-- Backups are verified with checksums stored alongside the backup to allow spotting any bit-rot.
+- Simple, clear command-line interface (CLI)
+- Available as a library (rust crate) to allow other user interfaces / automations to be built
+- Reports of files that have gone missing based on previous checksums
+	- spot problems by making changes more visible
 
-Doesn't even work yet. Almost guaranteed to eat all your data currently. Use at
+## Work in progress
+
+⚠️ Doesn't even work yet. Almost guaranteed to eat all your data currently. Use at
 own risk. Make backups before running this anywhere (irony alert).
+
+⚠️ This is far from finished, if you want something that already works take a look
+at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://github.com/bit-team/backintime))
 
 # Inspiration
 
@@ -27,53 +32,7 @@ own risk. Make backups before running this anywhere (irony alert).
 * [BackInTime](https://backintime.readthedocs.io/)
 * My own [verify/rehash scripts](https://gist.github.com/timabell/f70f34f8933b2abaf42789f8afdbd7d5)
 
-# Idea
-
-* backup to hotpluggable encrypted compressed external hdd
-* use rsnapshot style readable normal folders with hardlinks to use less space
-* spot problems by making changes more visible
-* keep as much as possible within the limits of the available disk space
-
-# Plan
-
-* first backup
-    * copy everything from source to dest - watch out for changing files
-* second backup
-    * hard link to old backup if same
-    * spot dupes, hardlink them
-* when down to last xMb (default 100)
-    * hardlink files till we hit an unseen thing to back up
-      * find the least desirable backup, remove the whole thing in one go
-      * continue if enough space else loop
-
 # Code Design
 
 * [Outside-in-tests](https://pod.0x5.uk/25)
 * Library-first - to allow this program to be driven from multiple user interfaces, the core logic shall be published as a library crate, and then the bundled CLI will use only the public interface provided by the disk-hog library crate.
-
-# Todo
-
-* automount/unmount external disk for safe removal when not in use - autofs
-* disk encryption - luks
-* disk compression ??
-* scheduling - anacron
-* use all available space, overwrite old on demand
-* UI for progress
-* non-root
-* rsnapshot style backup folders
-* drilldown report on chnages so you can spot anything untoward
-* hardlink moved files
-* make old backups read-only to defeat viruses
-* optimal plan for removing backups? https://en.wikipedia.org/wiki/Backup_rotation_scheme - "Weighted random distribution"
-* how to track what we already have? sha-1 of everything?
-* verifying latest backup
-* report on primary backup size vs total disk size
-* report on available history (simply list dated folders)
-
-# Coding Resources for the future
-
-* Polling filesystem library https://github.com/npat-efault/poller
-
-# Badgers
-
-[![Go](https://github.com/timabell/disk-hog-backup/workflows/Go/badge.svg)](https://github.com/timabell/disk-hog-backup/actions?query=workflow%3AGo)
