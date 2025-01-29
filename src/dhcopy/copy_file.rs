@@ -1,7 +1,7 @@
-use crate::test_helpers::test_helpers::{create_tmp_folder, file_contents_matches};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self};
 use std::path::Path;
+use crate::test_helpers::test_helpers::{create_tmp_folder, file_contents_matches};
 
 const THE_FILE: &str = "testfile.txt";
 const THE_TEXT: &str = "backmeup susie";
