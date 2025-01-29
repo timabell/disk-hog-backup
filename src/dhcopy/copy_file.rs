@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self};
+use std::io::{self, Write};
 use std::path::Path;
 use crate::test_helpers::test_helpers::{create_tmp_folder, file_contents_matches};
 
