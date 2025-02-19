@@ -6,8 +6,8 @@ use std::io::{self, Read};
 use std::path::Path;
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
-	let mut rng = rand::thread_rng();
-	let random_suffix: u32 = rng.gen();
+	let mut rng = rand::rng();
+	let random_suffix: u32 = rng.random();
 	let dir = env::temp_dir().join(format!("dhb-{}-{}", prefix, random_suffix));
 	fs::create_dir_all(&dir)?;
 	Ok(dir.to_string_lossy().into_owned())
