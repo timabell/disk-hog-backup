@@ -193,6 +193,168 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn test_backup_with_symlinks() -> io::Result<()> {
+	// Set up source directory with a test file and symlinks
+	let source = create_tmp_folder("source")?;
+
+	// Create a real file
+	let test_file = "test.txt";
+	let test_content = "Hello, backup!";
+	create_test_file(&source, test_file, test_content)?;
+
+	// Create a symlink to the file
+	let symlink_path = Path::new(&source).join("link_to_test.txt");
+	std::os::unix::fs::symlink(Path::new(&source).join(test_file), &symlink_path)?;
+
+	// Create a symlink to a directory
+	let target_dir = Path::new(&source).join("target_dir");
+	fs::create_dir(&target_dir)?;
+	create_test_file(
+		&target_dir.to_str().unwrap(),
+		"target.txt",
+		"target content",
+	)?;
+
+	let dir_symlink_path = Path::new(&source).join("link_to_dir");
+	std::os::unix::fs::symlink(&target_dir, &dir_symlink_path)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup set directory
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	// Verify file symlink
+	let backed_up_symlink = backup_set.path().join("link_to_test.txt");
+	assert!(backed_up_symlink.exists(), "Backup symlink should exist");
+	assert!(
+		backed_up_symlink.is_symlink(),
+		"Should be a symlink in backup"
+	);
+
+	let symlink_target = fs::read_link(&backed_up_symlink)?;
+	assert_eq!(
+		symlink_target,
+		Path::new(&source).join(test_file),
+		"Symlink should point to original target"
+	);
+
+	// Verify directory symlink
+	let backed_up_dir_symlink = backup_set.path().join("link_to_dir");
+	assert!(
+		backed_up_dir_symlink.exists(),
+		"Backup dir symlink should exist"
+	);
+	assert!(
+		backed_up_dir_symlink.is_symlink(),
+		"Should be a symlink in backup"
+	);
+
+	let dir_symlink_target = fs::read_link(&backed_up_dir_symlink)?;
+	assert_eq!(
+		dir_symlink_target, target_dir,
+		"Directory symlink should point to original target"
+	);
+
+	Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn test_backup_with_windows_symlinks() -> io::Result<()> {
+	// Set up source directory with a test file and symlinks
+	let source = create_tmp_folder("source")?;
+
+	// Create a real file
+	let test_file = "test.txt";
+	let test_content = "Hello, backup!";
+	create_test_file(&source, test_file, test_content)?;
+
+	// Create a symlink to the file
+	let symlink_path = Path::new(&source).join("link_to_test.txt");
+	std::os::windows::fs::symlink_file(Path::new(&source).join(test_file), &symlink_path)?;
+
+	// Create a symlink to a directory
+	let target_dir = Path::new(&source).join("target_dir");
+	fs::create_dir(&target_dir)?;
+	create_test_file(
+		&target_dir.to_str().unwrap(),
+		"target.txt",
+		"target content",
+	)?;
+
+	let dir_symlink_path = Path::new(&source).join("link_to_dir");
+	std::os::windows::fs::symlink_dir(&target_dir, &dir_symlink_path)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup set directory
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	// Verify file symlink
+	let backed_up_symlink = backup_set.path().join("link_to_test.txt");
+	assert!(backed_up_symlink.exists(), "Backup symlink should exist");
+	assert!(
+		backed_up_symlink.is_symlink(),
+		"Should be a symlink in backup"
+	);
+
+	let symlink_target = fs::read_link(&backed_up_symlink)?;
+	assert_eq!(
+		symlink_target,
+		Path::new(&source).join(test_file),
+		"Symlink should point to original target"
+	);
+
+	// Verify directory symlink
+	let backed_up_dir_symlink = backup_set.path().join("link_to_dir");
+	assert!(
+		backed_up_dir_symlink.exists(),
+		"Backup dir symlink should exist"
+	);
+	assert!(
+		backed_up_dir_symlink.is_symlink(),
+		"Should be a symlink in backup"
+	);
+
+	let dir_symlink_target = fs::read_link(&backed_up_dir_symlink)?;
+	assert_eq!(
+		dir_symlink_target, target_dir,
+		"Directory symlink should point to original target"
+	);
+
+	Ok(())
+}
+
 fn disk_hog_backup_cmd() -> Command {
 	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }
