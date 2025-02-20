@@ -27,11 +27,37 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: disk-hog-backup-linux-x86_64
+            binary_name: disk-hog-backup
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: disk-hog-backup-windows-x86_64
+            binary_name: disk-hog-backup.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: disk-hog-backup-macos-x86_64
+            binary_name: disk-hog-backup
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose --release
+      run: cargo build --target ${{ matrix.target }} --release
     - name: Test
       run: cargo test --verbose --release
+    - name: Package Binary
+      shell: bash
+      run: |
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          7z a ${{ matrix.artifact_name }}.zip target/release/${{ matrix.binary_name }}
+        else
+          tar -czvf ${{ matrix.artifact_name }}.tar.gz -C target/release ${{ matrix.binary_name }}
+        fi
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: ${{ matrix.artifact_name }}.*
+        retention-days: 1
