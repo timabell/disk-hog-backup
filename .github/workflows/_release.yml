@@ -12,6 +12,16 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate Release Notes
+      id: changelog
+      uses: orhun/git-cliff-action@v2
+      with:
+        config: cliff.toml
+        args: --latest --strip header
+
     - name: Version
       shell: bash
       env:
@@ -19,24 +29,30 @@ jobs:
       run: |
         sed -i "s/0\\.0\\.0-git/${RELEASE_TAG##*\/v}/" Cargo.toml
         sed -i "s/0\\.0\\.0-git/${RELEASE_TAG##*\/v}/" Cargo.lock
+
     - name: Download Linux Build
       uses: actions/download-artifact@v4
       with:
         name: disk-hog-backup-linux-x86_64
+
     - name: Download Windows Build
       uses: actions/download-artifact@v4
       with:
         name: disk-hog-backup-windows-x86_64
+
     - name: Download macOS Build
       uses: actions/download-artifact@v4
       with:
         name: disk-hog-backup-macos-x86_64
+
     - name: Generate SHA256 Checksums
       run: |
         sha256sum disk-hog-backup-linux-x86_64.tar.gz disk-hog-backup-windows-x86_64.zip disk-hog-backup-macos-x86_64.tar.gz > SHA256SUMS.txt
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
+        body: ${{ steps.changelog.outputs.content }}
         files: |
           disk-hog-backup-linux-x86_64.tar.gz
           disk-hog-backup-windows-x86_64.zip
