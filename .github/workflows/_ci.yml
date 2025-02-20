@@ -15,6 +15,15 @@ jobs:
     - name: Verify Dependencies
       run: cargo vet
 
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
+    - name: Check Licenses
+      run: cargo deny check licenses
+
   build:
     strategy:
       matrix:
