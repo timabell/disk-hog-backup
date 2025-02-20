@@ -9,6 +9,7 @@ use std::process;
 #[derive(Parser)]
 #[command(name = "diskhog")]
 #[command(about = "A tool for backing up directories", long_about = None)]
+#[clap(author, version)]
 struct Args {
 	/// Source folder to back up
 	#[arg(short, long)]
