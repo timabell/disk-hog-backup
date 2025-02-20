@@ -43,6 +43,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
+    - name: Add Target
+      run: rustup target add ${{ matrix.target }}
     - name: Build
       run: cargo build --target ${{ matrix.target }} --release
     - name: Test
@@ -51,9 +53,9 @@ jobs:
       shell: bash
       run: |
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          7z a ${{ matrix.artifact_name }}.zip target/release/${{ matrix.binary_name }}
+          7z a ${{ matrix.artifact_name }}.zip "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
         else
-          tar -czvf ${{ matrix.artifact_name }}.tar.gz -C target/release ${{ matrix.binary_name }}
+          tar -czvf ${{ matrix.artifact_name }}.tar.gz -C "target/${{ matrix.target }}/release" "${{ matrix.binary_name }}"
         fi
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
