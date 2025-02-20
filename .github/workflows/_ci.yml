@@ -6,22 +6,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
-    runs-on: ${{ matrix.os }}
+  vet:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
     - name: Install cargo-vet
       run: cargo install cargo-vet
-
     - name: Verify Dependencies
       run: cargo vet
 
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose --release
-
     - name: Test
       run: cargo test --verbose --release
