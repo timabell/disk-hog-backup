@@ -13,7 +13,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install cargo-vet
+      run: cargo install cargo-vet
+
+    - name: Verify Dependencies
+      run: cargo vet
+
     - name: Build
       run: cargo build --verbose --release
+
     - name: Test
       run: cargo test --verbose --release
