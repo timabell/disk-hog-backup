@@ -21,6 +21,11 @@ struct Args {
 }
 
 fn main() {
+	println!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+	println!("License: {}", env!("CARGO_PKG_LICENSE"));
+	println!("{}", env!("CARGO_PKG_REPOSITORY"));
+	println!();
+
 	let args = Args::parse();
 
 	match backup(&args.source, &args.destination) {

@@ -2,6 +2,9 @@
 name = "disk-hog-backup"
 version = "0.0.0-git"
 edition = "2021"
+license = "AGPL-3.0"
+repository = "https://github.com/timabell/disk-hog-backup"
+description = "A tool for backing up to external disk, making best use of the available space "
 
 [dependencies]
 chrono = "0.4.39"
