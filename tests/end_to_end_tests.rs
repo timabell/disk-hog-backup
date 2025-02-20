@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use chrono;
 use rand::Rng;
 use std::env;
 use std::fs;
@@ -6,7 +7,7 @@ use std::io;
 use std::path::Path;
 
 #[test]
-fn test_backup_creates_new_files() -> io::Result<()> {
+fn test_backup_of_single_text_file() -> io::Result<()> {
 	// Set up source directory with a test file
 	let source = create_tmp_folder("source")?;
 	let test_file = "test.txt";
@@ -46,7 +47,7 @@ fn test_backup_creates_new_files() -> io::Result<()> {
 }
 
 #[test]
-fn test_backup_nested_files() -> Result<(), Box<dyn std::error::Error>> {
+fn test_backup_nested_file() -> Result<(), Box<dyn std::error::Error>> {
 	// Create source folder with nested structure
 	let source = create_tmp_folder("orig")?;
 	let nested_folder = Path::new(&source).join("folder1/folder2/folder3");
@@ -86,7 +87,7 @@ fn test_backup_nested_files() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_backup_empty_nested_folders() -> Result<(), Box<dyn std::error::Error>> {
+fn test_backup_empty_nested_folder() -> Result<(), Box<dyn std::error::Error>> {
 	// Create source folder with nested empty folders
 	let source = create_tmp_folder("orig")?;
 	let nested_empty_folder = Path::new(&source).join("empty1/empty2/empty3");
@@ -120,6 +121,82 @@ fn test_backup_empty_nested_folders() -> Result<(), Box<dyn std::error::Error>> 
 	// Verify the folder is empty
 	let dir_contents: Vec<_> = fs::read_dir(&nested_backup)?.collect();
 	assert_eq!(dir_contents.len(), 0, "folder should be empty");
+
+	// Cleanup
+	fs::remove_dir_all(&source)?;
+	fs::remove_dir_all(&dest)?;
+
+	Ok(())
+}
+
+#[test]
+fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
+	// Create test folders
+	let source = create_tmp_folder("orig")?;
+	let dest = create_tmp_folder("backups")?;
+
+	// Record time just before backup
+	let before_backup = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0)
+		.unwrap()
+		.naive_utc();
+
+	// Run backup and capture output
+	let output = disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&dest)
+		.output()?;
+
+	// Record time just after backup
+	let after_backup = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0)
+		.unwrap()
+		.naive_utc();
+
+	assert!(output.status.success(), "backup command should succeed");
+
+	// Extract set name from output message
+	let stdout = String::from_utf8(output.stdout)?;
+	let set_name = stdout
+		.lines()
+		.find(|line| line.contains("backing up") && line.contains("into"))
+		.and_then(|line| {
+			// Extract the path after "into"
+			line.split("into").nth(1)
+		})
+		.and_then(|path| {
+			// Extract last path component
+			Path::new(path.trim())
+				.file_name()
+				.and_then(|s| s.to_str())
+				.map(|s| s.trim_matches('"'))
+		})
+		.ok_or("Could not find set name in output")?;
+
+	// Parse the timestamp from set name (format: dhb-set-YYYYMMDD-HHMMSS)
+	assert!(
+		set_name.starts_with("dhb-set-"),
+		"set name should start with dhb-set-"
+	);
+	let datetime_str = &set_name[8..]; // Skip "dhb-set-"
+	let backup_time = chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y%m%d-%H%M%S")?;
+
+	// Verify timestamp is within the execution window (allowing for second rollover)
+	assert!(
+		backup_time >= before_backup && backup_time <= after_backup,
+		"backup timestamp {} should be between {} and {}",
+		backup_time,
+		before_backup,
+		after_backup
+	);
+
+	// Verify the folder exists on disk with exactly this name
+	let backup_folder = Path::new(&dest).join(set_name);
+	assert!(
+		backup_folder.exists(),
+		"backup folder {} should exist on disk",
+		backup_folder.display()
+	);
 
 	// Cleanup
 	fs::remove_dir_all(&source)?;

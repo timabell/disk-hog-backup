@@ -1,7 +1,6 @@
 mod backup;
 mod backup_sets;
 mod dhcopy;
-mod test_helpers;
 
 use crate::backup::backup::backup;
 use clap::Parser;
@@ -24,7 +23,7 @@ fn main() {
 	let args = Args::parse();
 
 	match backup(&args.source, &args.destination) {
-		Ok(_) => println!("Backup successful"),
+		Ok(_) => (),
 		Err(e) => {
 			eprintln!("Backup failed: {}", e);
 			process::exit(1);
