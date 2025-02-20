@@ -7,7 +7,7 @@ use std::path::Path;
 
 pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 	fs::create_dir_all(dest)?;
-	let set_name = create_empty_set(dest, || Utc::now())?;
+	let set_name = create_empty_set(dest, Utc::now)?;
 	let dest_folder = Path::new(dest).join(&set_name);
 	println!("Backing up {} into {:?} …", source, dest_folder);
 	copy_folder(source, dest_folder.to_str().unwrap())?;
