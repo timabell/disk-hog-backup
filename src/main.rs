@@ -2,7 +2,7 @@ mod backup;
 mod backup_sets;
 mod dhcopy;
 
-use crate::backup::backup::backup;
+use crate::backup::backup;
 use clap::Parser;
 use std::process;
 
