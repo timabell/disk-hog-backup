@@ -79,10 +79,6 @@ fn test_backup_nested_file() -> Result<(), Box<dyn std::error::Error>> {
 	assert!(nested_backup.exists(), "nested file should be backed up");
 	assert_eq!(fs::read_to_string(&nested_backup)?, "nested content");
 
-	// Cleanup
-	fs::remove_dir_all(&source)?;
-	fs::remove_dir_all(&dest)?;
-
 	Ok(())
 }
 
@@ -121,10 +117,6 @@ fn test_backup_empty_nested_folder() -> Result<(), Box<dyn std::error::Error>> {
 	// Verify the folder is empty
 	let dir_contents: Vec<_> = fs::read_dir(&nested_backup)?.collect();
 	assert_eq!(dir_contents.len(), 0, "folder should be empty");
-
-	// Cleanup
-	fs::remove_dir_all(&source)?;
-	fs::remove_dir_all(&dest)?;
 
 	Ok(())
 }
@@ -197,10 +189,6 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 		"backup folder {} should exist on disk",
 		backup_folder.display()
 	);
-
-	// Cleanup
-	fs::remove_dir_all(&source)?;
-	fs::remove_dir_all(&dest)?;
 
 	Ok(())
 }
