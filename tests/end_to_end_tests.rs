@@ -3,8 +3,41 @@ use chrono;
 use rand::Rng;
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
+use std::process::{Command as StdCommand, Stdio};
+
+// Helper to create a Command for the disk-hog-backup binary
+pub fn disk_hog_backup_cmd() -> Command {
+	Command::cargo_bin("disk-hog-backup").unwrap()
+}
+
+// Helper to run the binary directly for output capture
+pub fn disk_hog_backup_process(source: &str, dest: &str) -> io::Result<std::process::Child> {
+	let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+	StdCommand::new(cargo)
+		.args(["run", "--", "--source", source, "--destination", dest])
+		.stdout(Stdio::piped())
+		.spawn()
+}
+
+struct TeeWriter<W1: Write, W2: Write> {
+	writer1: W1,
+	writer2: W2,
+}
+
+impl<W1: Write, W2: Write> Write for TeeWriter<W1, W2> {
+	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+		self.writer1.write_all(buf)?;
+		self.writer2.write_all(buf)?;
+		Ok(buf.len())
+	}
+
+	fn flush(&mut self) -> io::Result<()> {
+		self.writer1.flush()?;
+		self.writer2.flush()
+	}
+}
 
 #[test]
 fn test_backup_of_single_text_file() -> io::Result<()> {
@@ -130,7 +163,7 @@ fn test_backup_empty_nested_folder() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
+fn test_backup_set_name_from_output() -> Result<(), Box<dyn std::error::Error>> {
 	// Create test folders
 	let source = create_tmp_folder("orig")?;
 	let dest = create_tmp_folder("backups")?;
@@ -141,23 +174,23 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 		.naive_utc();
 
 	// Run backup and capture output
-	let output = disk_hog_backup_cmd()
-		.arg("--source")
-		.arg(&source)
-		.arg("--destination")
-		.arg(&dest)
-		.output()?;
+	let mut child = disk_hog_backup_process(&source, &dest)?;
+	let mut output = String::new();
+	if let Some(mut stdout) = child.stdout.take() {
+		use std::io::Read;
+		stdout.read_to_string(&mut output)?;
+		print!("{}", output); // Display the output
+	}
+	let status = child.wait()?;
+	assert!(status.success(), "backup command should succeed");
 
 	// Record time just after backup
 	let after_backup = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0)
 		.unwrap()
 		.naive_utc();
 
-	assert!(output.status.success(), "backup command should succeed");
-
 	// Extract set name from output message
-	let stdout = String::from_utf8(output.stdout)?;
-	let set_name = stdout
+	let set_name = output
 		.lines()
 		.find(|line| line.contains("backing up") && line.contains("into"))
 		.and_then(|line| {
@@ -203,10 +236,6 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 	fs::remove_dir_all(&dest)?;
 
 	Ok(())
-}
-
-fn disk_hog_backup_cmd() -> Command {
-	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
