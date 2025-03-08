@@ -364,6 +364,7 @@ pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
 	let random_suffix: u32 = rng.random();
 	let dir = env::temp_dir().join(format!("dhb-{}-{}", prefix, random_suffix));
 	fs::create_dir_all(&dir)?;
+	println!("Created temp folder: {}", dir.to_string_lossy());
 	Ok(dir.to_string_lossy().into_owned())
 }
 
