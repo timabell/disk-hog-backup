@@ -10,7 +10,7 @@ use std::os::unix::fs::symlink;
 #[cfg(windows)]
 use std::os::windows::fs::{symlink_dir, symlink_file};
 
-use crate::dhcopy::file_hash;
+use crate::dhcopy::streaming_copy::copy_file_with_streaming;
 
 pub fn copy_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io::Result<()> {
 	println!("backing up folder {} into {}", source, dest);
@@ -44,48 +44,9 @@ pub fn copy_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io::R
 				prev_backup_subdir.as_deref(),
 			)?;
 		} else {
-			// Check if the file exists in the previous backup
-			if let Some(prev) = prev_backup {
-				let prev_path = Path::new(prev).join(&rel_path);
-
-				if prev_path.exists() && !prev_path.is_dir() {
-					// Check if the file content is the same using MD5
-					match file_hash::files_match(&path, &prev_path) {
-						Ok(true) => {
-							// Files match, create a hardlink
-							#[cfg(unix)]
-							{
-								println!("Hardlinking {} (unchanged)", rel_path.to_string_lossy());
-								link(&prev_path, &dest_path)?;
-								continue; // Skip the copy below
-							}
-
-							// On Windows or other platforms, fall back to copying
-							#[cfg(not(unix))]
-							{
-								println!(
-									"File unchanged: {} (copying, hardlinks not supported)",
-									rel_path.to_string_lossy()
-								);
-							}
-						}
-						Ok(false) => {
-							println!("File changed: {}", rel_path.to_string_lossy());
-						}
-						Err(e) => {
-							println!(
-								"Error comparing files: {} - {}",
-								rel_path.to_string_lossy(),
-								e
-							);
-						}
-					}
-				}
-			}
-
-			// If we got here, either there's no previous backup, the file doesn't exist in it,
-			// the files don't match, or we're on a platform that doesn't support hardlinks
-			fs::copy(&path, &dest_path)?;
+			// Use the streaming copy implementation for regular files
+			let prev_path = prev_backup.map(|p| Path::new(p).join(&rel_path));
+			copy_file_with_streaming(&path, &dest_path, prev_path.as_deref())?;
 		}
 	}
 	Ok(())
