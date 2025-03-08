@@ -5,6 +5,8 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::thread;
+use std::time;
 
 #[test]
 fn test_backup_of_single_text_file() -> io::Result<()> {
@@ -353,6 +355,128 @@ fn test_backup_with_windows_symlinks() -> io::Result<()> {
 	);
 
 	Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Error>> {
+	// Set up source directory with two test files
+	let source = create_tmp_folder("source")?;
+
+	// Create two test files
+	let file1 = "file1.txt";
+	let file2 = "file2.txt";
+	let content1 = "This is file 1 content";
+	let content2 = "This is file 2 content";
+	create_test_file(&source, file1, content1)?;
+	create_test_file(&source, file2, content2)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups")?;
+
+	// Run first backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the first backup set
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 1, "Should create exactly one backup set");
+	let first_backup_set = &backup_sets[0];
+
+	// Verify first backup files exist
+	let first_backup_file1 = first_backup_set.path().join(file1);
+	let first_backup_file2 = first_backup_set.path().join(file2);
+	assert!(
+		first_backup_file1.exists(),
+		"First backup file1 should exist"
+	);
+	assert!(
+		first_backup_file2.exists(),
+		"First backup file2 should exist"
+	);
+
+	// Modify file1 in source
+	let modified_content = "This is file 1 with modified content";
+	create_test_file(&source, file1, modified_content)?;
+
+	// Add a delay to ensure different timestamps for backup sets
+	thread::sleep(time::Duration::from_secs(2));
+
+	// Run second backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the second backup set (should be the newest one)
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 2, "Should now have two backup sets");
+
+	// Sort backup sets by creation time to find the newest one
+	let mut backup_sets = backup_sets;
+	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().created().unwrap());
+	let second_backup_set = &backup_sets[1];
+
+	// Get paths to the second backup files
+	let second_backup_file1 = second_backup_set.path().join(file1);
+	let second_backup_file2 = second_backup_set.path().join(file2);
+
+	// Verify both files exist in second backup
+	assert!(
+		second_backup_file1.exists(),
+		"Second backup file1 should exist"
+	);
+	assert!(
+		second_backup_file2.exists(),
+		"Second backup file2 should exist"
+	);
+
+	// Verify file1 content was updated
+	let second_backup_file1_content = fs::read_to_string(&second_backup_file1)?;
+	assert_eq!(
+		second_backup_file1_content, modified_content,
+		"File1 in second backup should have modified content"
+	);
+
+	// Verify file2 content is unchanged
+	let second_backup_file2_content = fs::read_to_string(&second_backup_file2)?;
+	assert_eq!(
+		second_backup_file2_content, content2,
+		"File2 in second backup should have original content"
+	);
+
+	// Check if file2 is hardlinked (same inode) between backups
+	let first_inode = get_inode(&first_backup_file2)?;
+	let second_inode = get_inode(&second_backup_file2)?;
+	assert_eq!(
+		first_inode, second_inode,
+		"Unmodified file2 should be hardlinked (same inode) between backup sets"
+	);
+
+	// Check that file1 is NOT hardlinked (different inodes) between backups
+	let first_inode = get_inode(&first_backup_file1)?;
+	let second_inode = get_inode(&second_backup_file1)?;
+	assert_ne!(
+		first_inode, second_inode,
+		"Modified file1 should NOT be hardlinked (different inodes) between backup sets"
+	);
+
+	Ok(())
+}
+
+#[cfg(unix)]
+fn get_inode(path: &Path) -> io::Result<u64> {
+	use std::os::unix::fs::MetadataExt;
+	let metadata = fs::metadata(path)?;
+	Ok(metadata.ino())
 }
 
 fn disk_hog_backup_cmd() -> Command {
