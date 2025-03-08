@@ -262,3 +262,32 @@ fn main() {
     }
 }
 ```
+
+## Decision Update: Storing Precomputed MD5 Hashes for Efficient Comparisons
+
+### **Issue: Slow MD5 Recalculation on the Target Backup Set**
+The current approach requires re-computing the MD5 of each existing file in the backup set to determine whether the new copy is necessary. This is inefficient, particularly on magnetic disks where reading competes with writes, further slowing down the backup process.
+
+### **Solution: Precomputed MD5 Hash File**
+To avoid expensive re-reads from the target disk, we will generate and store a **backup metadata file** containing precomputed MD5 hashes for every file in the backup set. This file will be written in the root of the backup set after each backup completes.
+
+- **Format:** A simple text file listing each file's relative path and its MD5 hash.
+- **Location:** Stored in the root directory of each backup set.
+- **Usage:**
+	- During subsequent backups, this file will be read first to quickly determine whether a file is identical to the previous backup.
+	- If the hash matches, we can **hardlink** the file instead of copying it.
+	- If the hash does not match, we proceed with reading and hashing the source file to determine whether a write is required.
+
+### **Effect on Performance**
+- **Speeds up backup operations:**
+	- The MD5 comparison step no longer requires a read from the backup disk for unchanged files.
+	- This avoids **contention between reads and writes**, which is especially beneficial for magnetic disks.
+- **Hardlinking unchanged files becomes trivial:**
+	- Since the hash check is immediate, we can create hardlinks efficiently without re-reading data.
+- **Verification is separate and remains trivial:**
+	- If verification is required, the MD5 file can be re-checked against the actual files in a separate, explicit step.
+
+### **Implementation Considerations**
+- The format should be **human-readable** but also easily parsed programmatically.
+
+This change ensures that **subsequent backups can determine file changes without costly disk reads**, greatly improving efficiency while preserving correctness.
