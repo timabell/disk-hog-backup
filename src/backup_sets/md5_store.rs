@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-const MD5_FILENAME: &str = "backup_md5_hashes.txt";
+const MD5_FILENAME: &str = "dhb_md5_hashes.txt";
 
 pub struct Md5Store {
 	hashes: HashMap<PathBuf, [u8; 16]>,
@@ -68,13 +68,12 @@ impl Md5Store {
 		let md5_file_path = self.backup_root.join(MD5_FILENAME);
 		let mut file = File::create(&md5_file_path)?;
 
-		// Write header
-		writeln!(file, "# Backup MD5 hashes - DO NOT EDIT")?;
-		writeln!(file, "# Format: <md5_hash_hex> <relative_path>")?;
-		writeln!(file)?;
+		// Sort entries by path
+		let mut entries: Vec<(&PathBuf, &[u8; 16])> = self.hashes.iter().collect();
+		entries.sort_by(|a, b| a.0.cmp(b.0));
 
-		// Write entries
-		for (path, hash) in &self.hashes {
+		// Write entries in sorted order
+		for (path, hash) in entries {
 			let path_str = path.to_string_lossy();
 			let hash_hex = hash.iter().fold(String::with_capacity(32), |mut acc, &b| {
 				write!(acc, "{:02x}", b).unwrap();
