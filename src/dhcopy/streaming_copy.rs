@@ -122,9 +122,7 @@ fn stream_with_unified_pipeline(
 	let cancel_flag_writer = Arc::clone(&cancel_flag);
 
 	// Global memory counter
-	let global_memory = Arc::new(&GLOBAL_MEMORY_USAGE);
-	let global_memory_reader = Arc::clone(&global_memory);
-	let global_memory_writer = Arc::clone(&global_memory);
+	let global_memory = &GLOBAL_MEMORY_USAGE;
 
 	// Clone paths for threads
 	let src_path_clone = src_path.to_path_buf();
@@ -138,7 +136,7 @@ fn stream_with_unified_pipeline(
 			data_tx,
 			md5_tx,
 			cancel_flag_reader,
-			global_memory_reader,
+			global_memory,
 		)
 	});
 
@@ -148,7 +146,7 @@ fn stream_with_unified_pipeline(
 			&dst_path_for_writer,
 			data_rx,
 			cancel_flag_writer,
-			global_memory_writer,
+			global_memory,
 		)
 	});
 
@@ -171,8 +169,8 @@ fn stream_with_unified_pipeline(
 		))
 	})?;
 
-	// Wait for writer thread to complete
-	let _writer_result = writer_handle.join().unwrap_or_else(|_| {
+	// Wait for writer thread to finish
+	writer_handle.join().unwrap_or_else(|_| {
 		Err(io::Error::new(
 			io::ErrorKind::Other,
 			"Writer thread panicked",
@@ -225,7 +223,7 @@ fn reader_thread(
 	data_tx: Sender<Vec<u8>>,
 	md5_tx: Sender<[u8; 16]>,
 	cancel_flag: Arc<AtomicBool>,
-	global_memory: Arc<&AtomicUsize>,
+	global_memory: &AtomicUsize,
 ) -> io::Result<[u8; 16]> {
 	let mut file = File::open(src_path)?;
 	let mut context = Context::new();
@@ -291,7 +289,7 @@ fn writer_thread(
 	dst_path: &Path,
 	data_rx: Receiver<Vec<u8>>,
 	cancel_flag: Arc<AtomicBool>,
-	global_memory: Arc<&AtomicUsize>,
+	global_memory: &AtomicUsize,
 ) -> io::Result<()> {
 	let mut file = File::create(dst_path)?;
 

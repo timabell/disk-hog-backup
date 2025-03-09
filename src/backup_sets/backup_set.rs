@@ -6,9 +6,17 @@ pub fn find_most_recent_set(dest: &str) -> Option<String> {
 		Ok(entries) => {
 			let mut backup_sets: Vec<_> = entries
 				.filter_map(Result::ok)
-				.filter(|entry| {
-					entry.path().is_dir()
-						&& entry.file_name().to_string_lossy().starts_with("dhb-set-")
+				.filter_map(|entry| {
+					let meta = entry.metadata().ok()?;
+					if meta.is_dir() && entry.file_name().to_string_lossy().starts_with("dhb-set-")
+					{
+						Some((
+							entry.file_name().to_string_lossy().to_string(),
+							meta.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+						))
+					} else {
+						None
+					}
 				})
 				.collect();
 
@@ -17,21 +25,10 @@ pub fn find_most_recent_set(dest: &str) -> Option<String> {
 			}
 
 			// Sort by creation time, most recent last
-			backup_sets.sort_by_key(|entry| {
-				entry
-					.path()
-					.metadata()
-					.map(|meta| {
-						meta.created()
-							.unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
-					})
-					.unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
-			});
+			backup_sets.sort_by_key(|(_, created)| *created);
 
 			// Return the most recent (last) entry
-			backup_sets
-				.last()
-				.map(|entry| entry.file_name().to_string_lossy().to_string())
+			backup_sets.last().map(|(set_name, _)| set_name).cloned()
 		}
 		Err(_) => None,
 	}

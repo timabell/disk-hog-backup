@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -75,7 +76,10 @@ impl Md5Store {
 		// Write entries
 		for (path, hash) in &self.hashes {
 			let path_str = path.to_string_lossy();
-			let hash_hex: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+			let hash_hex = hash.iter().fold(String::with_capacity(32), |mut acc, &b| {
+				write!(acc, "{:02x}", b).unwrap();
+				acc
+			});
 
 			writeln!(file, "{} {}", hash_hex, path_str)?;
 		}
