@@ -35,19 +35,20 @@ jobs:
       with:
         name: disk-hog-backup-linux-x86_64
 
-    - name: Download Windows Build
-      uses: actions/download-artifact@v4
-      with:
-        name: disk-hog-backup-windows-x86_64
-
-    - name: Download macOS Build
-      uses: actions/download-artifact@v4
-      with:
-        name: disk-hog-backup-macos-x86_64
+#    - name: Download Windows Build
+#      uses: actions/download-artifact@v4
+#      with:
+#        name: disk-hog-backup-windows-x86_64
+#
+#    - name: Download macOS Build
+#      uses: actions/download-artifact@v4
+#      with:
+#        name: disk-hog-backup-macos-x86_64
 
     - name: Generate SHA256 Checksums
       run: |
-        sha256sum disk-hog-backup-linux-x86_64.tar.gz disk-hog-backup-windows-x86_64.zip disk-hog-backup-macos-x86_64.tar.gz > SHA256SUMS.txt
+        sha256sum disk-hog-backup-linux-x86_64.tar.gz > SHA256SUMS.txt
+#        sha256sum disk-hog-backup-linux-x86_64.tar.gz disk-hog-backup-windows-x86_64.zip disk-hog-backup-macos-x86_64.tar.gz > SHA256SUMS.txt
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -55,6 +56,6 @@ jobs:
         body: ${{ steps.changelog.outputs.content }}
         files: |
           disk-hog-backup-linux-x86_64.tar.gz
-          disk-hog-backup-windows-x86_64.zip
-          disk-hog-backup-macos-x86_64.tar.gz
+#          disk-hog-backup-windows-x86_64.zip
+#          disk-hog-backup-macos-x86_64.tar.gz
           SHA256SUMS.txt
