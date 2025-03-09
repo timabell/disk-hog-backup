@@ -105,8 +105,6 @@ The `.dhbignore` file supports the following pattern syntax:
 - `/` at the end of a pattern to match directories (e.g., `build/` ignores the build directory)
 - `!` at the beginning of a pattern to negate a previous pattern (e.g., `!important.log` includes important.log even if it matches a previous pattern like `*.log`)
 
-Ignore support is provided by the [ignore crate](https://docs.rs/ignore/latest/ignore/).
-
 ## Example .dhbignore File
 
 ```
