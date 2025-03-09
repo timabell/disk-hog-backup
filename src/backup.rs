@@ -33,6 +33,5 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 		prev_backup.as_deref(),
 	)?;
 
-	println!("Backing completed of {} into {:?}", source, backup_set_path);
 	Ok(backup_set_name)
 }
