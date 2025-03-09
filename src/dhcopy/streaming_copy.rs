@@ -1,8 +1,9 @@
 use crossbeam::channel::{Receiver, Sender, bounded};
 use md5::Context;
 use std::{
+	fmt::Write,
 	fs::{self, File},
-	io::{self, Read, Write},
+	io::{self, Read, Write as IoWrite},
 	path::Path,
 	sync::{
 		Arc,
@@ -69,7 +70,9 @@ pub fn copy_file_with_streaming(
 				if let Some(md5_store) = &context.md5_store {
 					if let Some(prev_hash) = md5_store.get_hash(rel_path) {
 						// We have a pre-calculated hash, use it for comparison
-						println!("Using pre-calculated hash for {}", rel_path.display());
+						let prev_hash_hex = format_md5_hash(*prev_hash);
+
+						// Stream the file with unified pipeline
 						let (hardlinked, src_hash) = stream_with_unified_pipeline(
 							src_path,
 							dst_path,
@@ -77,11 +80,19 @@ pub fn copy_file_with_streaming(
 							Some(*prev_hash),
 						)?;
 
+						let src_hash_hex = format_md5_hash(src_hash);
+
 						if hardlinked {
-							println!("Hardlinked {} (unchanged)", rel_path.display());
+							println!("Hardlinked: {} (MD5: {})", dst_path.display(), src_hash_hex);
 						} else {
-							println!("Copied {} (changed)", rel_path.display());
+							println!(
+								"Copied: {} (MD5 changed: {} -> {})",
+								dst_path.display(),
+								prev_hash_hex,
+								src_hash_hex
+							);
 						}
+
 						context.new_md5_store.add_hash(rel_path, src_hash);
 						return Ok(hardlinked);
 					}
@@ -98,10 +109,20 @@ pub fn copy_file_with_streaming(
 	// 4. We don't have the MD5 hash in the store
 	// In these cases, we need to perform a regular streaming copy
 	let (_, src_hash) = stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None)?;
-	println!("Copied {} (new or no previous hash)", rel_path.display());
+
+	let src_hash_hex = format_md5_hash(src_hash);
+	println!("Copied: {} (MD5: {})", dst_path.display(), src_hash_hex);
 
 	context.new_md5_store.add_hash(rel_path, src_hash);
 	Ok(false)
+}
+
+// Helper function to format MD5 hash as a hex string
+fn format_md5_hash(hash: [u8; 16]) -> String {
+	hash.iter().fold(String::new(), |mut output, b| {
+		let _ = write!(output, "{:02x}", b);
+		output
+	})
 }
 
 // Unified streaming pipeline that reads the file once, computes MD5, and potentially copies

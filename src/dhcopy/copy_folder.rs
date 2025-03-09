@@ -74,6 +74,10 @@ pub fn copy_folder(
 		} else {
 			// Use the streaming copy implementation for regular files
 			let prev_path = prev_backup.map(|p| Path::new(p).join(&file_name));
+
+			// Output the full path of the file being processed
+			println!("Processing: {}", path.display());
+
 			copy_file_with_streaming(
 				&path,
 				&dest_path,
