@@ -56,6 +56,6 @@ jobs:
         body: ${{ steps.changelog.outputs.content }}
         files: |
           disk-hog-backup-linux-x86_64.tar.gz
+          SHA256SUMS.txt
 #          disk-hog-backup-windows-x86_64.zip
 #          disk-hog-backup-macos-x86_64.tar.gz
-          SHA256SUMS.txt
