@@ -194,8 +194,11 @@ fn stream_with_unified_pipeline(
 		// Create a hardlink from previous to destination
 		#[cfg(unix)]
 		{
-			// Remove the destination file that was created
-			fs::remove_file(dst_path)?;
+			// Check if destination file exists before trying to remove it
+			if dst_path.exists() {
+				// Remove the destination file that was created
+				fs::remove_file(dst_path)?;
+			}
 			// Create a hardlink instead
 			fs::hard_link(prev_path, dst_path)?;
 			return Ok((true, reader_result));
@@ -204,8 +207,11 @@ fn stream_with_unified_pipeline(
 		#[cfg(not(unix))]
 		{
 			// On non-Unix platforms, fall back to copying
-			// Remove the destination file that was created
-			fs::remove_file(dst_path)?;
+			// Check if destination file exists before trying to remove it
+			if dst_path.exists() {
+				// Remove the destination file that was created
+				fs::remove_file(dst_path)?;
+			}
 			// Copy the file instead
 			fs::copy(prev_path, dst_path)?;
 			return Ok((true, reader_result));
@@ -298,7 +304,9 @@ fn writer_thread(
 		if cancel_flag.load(Ordering::SeqCst) {
 			// Clean up and exit
 			drop(file);
-			fs::remove_file(dst_path)?;
+			if dst_path.exists() {
+				fs::remove_file(dst_path)?;
+			}
 			return Ok(());
 		}
 
