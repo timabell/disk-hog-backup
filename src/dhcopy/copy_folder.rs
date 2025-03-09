@@ -244,6 +244,26 @@ fn process_directory_recursive(
 		// Determine the previous backup path if available
 		let prev_backup_path = prev_backup.map(|p| Path::new(p).join(rel_path));
 
+		// Skip named pipes (FIFOs) and other special files
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::FileTypeExt;
+			let file_type = entry.file_type()?;
+			if file_type.is_fifo()
+				|| file_type.is_socket()
+				|| file_type.is_block_device()
+				|| file_type.is_char_device()
+			{
+				println!(
+					"Skipping special file: {} (type: {:?})",
+					entry_path.display(),
+					file_type
+				);
+				ignored_paths.insert(entry_path.display().to_string());
+				continue;
+			}
+		}
+
 		if entry_path.is_symlink() {
 			let target = fs::read_link(&entry_path)?;
 

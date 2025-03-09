@@ -707,13 +707,77 @@ fn test_backup_of_hidden_file() -> io::Result<()> {
 	Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn test_backup_skips_special_files() -> io::Result<()> {
+	use std::process::Command as StdCommand;
+
+	// Set up source directory
+	let source = create_tmp_folder("source_special")?;
+
+	// Create a regular file
+	let regular_file = "regular.txt";
+	let regular_content = "This is a regular file";
+	create_test_file(&source, regular_file, regular_content)?;
+
+	// Create a named pipe (FIFO)
+	let fifo_path = Path::new(&source).join("test_fifo");
+	let fifo_path_str = fifo_path.to_str().unwrap();
+
+	// Use mkfifo to create the named pipe
+	StdCommand::new("mkfifo")
+		.arg(fifo_path_str)
+		.status()
+		.expect("Failed to create named pipe");
+
+	assert!(fifo_path.exists(), "Named pipe should exist");
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups_special")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Verify backup contents
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	// Regular file should be backed up
+	let backed_up_regular = backup_set.path().join(regular_file);
+	assert!(
+		backed_up_regular.exists(),
+		"Regular file should be backed up"
+	);
+
+	// FIFO should NOT be backed up
+	let backed_up_fifo = backup_set.path().join("test_fifo");
+	assert!(!backed_up_fifo.exists(), "FIFO should not be backed up");
+
+	Ok(())
+}
+
+#[cfg(not(unix))]
+#[test]
+fn test_backup_skips_special_files() -> io::Result<()> {
+	// This test is Unix-specific, so just pass on non-Unix platforms
+	Ok(())
+}
+
 fn disk_hog_backup_cmd() -> Command {
 	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
-	let mut rng = rand::rng();
-	let random_suffix: u32 = rng.random();
+	let random_suffix: u32 = rand::random();
 	let dir = env::temp_dir().join(format!("dhb-{}-{}", prefix, random_suffix));
 	fs::create_dir_all(&dir)?;
 	println!("Created temp folder: {}", dir.to_string_lossy());
