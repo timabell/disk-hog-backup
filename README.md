@@ -15,13 +15,79 @@
 - Reports of files that have gone missing based on previous checksums
 	- spot problems by making changes more visible
 
-## Work in progress
+# Work in progress!
 
 ⚠️ Experimental Alpha. Almost guaranteed to eat all your data currently. Use at
 own risk. Make backups before running this anywhere (irony alert). Please report issues at <https://github.com/timabell/disk-hog-backup/issues>
 
 ⚠️ This is far from finished, if you want something that already works take a look
 at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://github.com/bit-team/backintime))
+
+# Usage
+
+```
+disk-hog-backup --source <SOURCE> --destination <DESTINATION>
+```
+
+## Required Arguments
+
+- `--source <SOURCE>`: The directory to back up
+- `--destination <DESTINATION>`: The directory where backups will be stored
+
+# Examples
+
+## Backing up your home directory to an external drive
+
+```bash
+# Back up your documents to an external drive
+disk-hog-backup --source /home/username/Documents --destination /media/username/ExternalDrive/backups
+
+# Back up your entire home directory
+disk-hog-backup --source /home/username --destination /media/username/ExternalDrive/backups
+```
+
+## Scheduled Backups with cron
+
+To run backups automatically, you can add a cron job:
+
+```bash
+# Edit your crontab
+crontab -e
+
+# Add a line to run backups daily at 2 AM
+0 2 * * * /usr/local/bin/disk-hog-backup --source /home/username --destination /media/username/ExternalDrive/backups
+```
+
+# Verifying Backups
+
+Disk Hog Backup creates MD5 checksums of all backed-up files, making it easy to verify the integrity of your backups using standard tools. The checksums are stored in a file called `disk-hog-backup-hashes.md5`, and a checksum of this file is stored in `disk-hog-backup-hashes.md5.md5`.
+
+To verify your backups:
+
+1. First, verify the integrity of the checksums file itself:
+
+```bash
+cd /path/to/backup/set
+md5sum -c disk-hog-backup-hashes.md5.md5
+# Should output: disk-hog-backup-hashes.md5: OK
+```
+
+2. Then verify all files in the backup:
+
+```bash
+cd /path/to/backup/set
+md5sum -c disk-hog-backup-hashes.md5
+# Will check all files listed in the disk-hog-backup-hashes.md5 file
+```
+
+This allows you to detect any file corruption that might have occurred since the backup was created.
+
+# Tips
+
+- Mount your external drive to a consistent location for scheduled backups
+- Use `.dhbignore` files (see below) to exclude temporary files and large directories you don't need to back up
+- Check the backup logs periodically to ensure everything is working correctly
+- Periodically verify your backups using the md5sum commands above to ensure data integrity
 
 # Ignoring Files
 
@@ -71,6 +137,5 @@ node_modules/
 # Code Design
 
 * [Outside-in-tests](https://pod.0x5.uk/25)
-* Library-first - to allow this program to be driven from multiple user interfaces, the core logic shall be published as a library crate, and then the bundled CLI will use only the public interface provided by the disk-hog library crate.
 * ADRs - Architecture Decision Records
 	* [0001-streaming-copy-and-md5.md](doc/adr/0001-streaming-copy-and-md5.md)
