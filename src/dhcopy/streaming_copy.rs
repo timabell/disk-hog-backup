@@ -94,6 +94,12 @@ pub fn copy_file_with_streaming(
 						}
 
 						context.new_md5_store.add_hash(rel_path, src_hash);
+
+						// If we didn't hardlink, we need to preserve the metadata
+						if !hardlinked {
+							copy_file_metadata(src_path, dst_path)?;
+						}
+
 						return Ok(hardlinked);
 					}
 				}
@@ -113,8 +119,55 @@ pub fn copy_file_with_streaming(
 	let src_hash_hex = format_md5_hash(src_hash);
 	println!("Copied: {} (MD5: {})", dst_path.display(), src_hash_hex);
 
+	// Preserve file metadata (timestamps, permissions)
+	copy_file_metadata(src_path, dst_path)?;
+
 	context.new_md5_store.add_hash(rel_path, src_hash);
 	Ok(false)
+}
+
+// Helper function to copy file metadata (timestamps, permissions)
+fn copy_file_metadata(src_path: &Path, dst_path: &Path) -> io::Result<()> {
+	let src_metadata = fs::metadata(src_path)?;
+
+	// Copy file permissions
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		let permissions = src_metadata.permissions();
+		fs::set_permissions(dst_path, permissions)?;
+	}
+
+	// Copy file timestamps
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::MetadataExt;
+		let atime = filetime::FileTime::from_unix_time(
+			src_metadata.atime(),
+			src_metadata.atime_nsec() as u32,
+		);
+		let mtime = filetime::FileTime::from_unix_time(
+			src_metadata.mtime(),
+			src_metadata.mtime_nsec() as u32,
+		);
+		filetime::set_file_times(dst_path, atime, mtime)?;
+	}
+
+	#[cfg(windows)]
+	{
+		use std::os::windows::fs::MetadataExt;
+		let last_write_time = src_metadata.last_write_time();
+		let last_access_time = src_metadata.last_access_time();
+		let creation_time = src_metadata.creation_time();
+
+		// Convert Windows time to FileTime
+		let mtime = filetime::FileTime::from_windows_file_time(last_write_time);
+		let atime = filetime::FileTime::from_windows_file_time(last_access_time);
+
+		filetime::set_file_times(dst_path, atime, mtime)?;
+	}
+
+	Ok(())
 }
 
 // Helper function to format MD5 hash as a hex string

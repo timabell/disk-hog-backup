@@ -49,6 +49,98 @@ fn test_backup_of_single_text_file() -> io::Result<()> {
 }
 
 #[test]
+fn test_metadata_preserved() -> io::Result<()> {
+	// Set up source directory with a test file
+	let source = create_tmp_folder("source_meta")?;
+	let test_file = "metadata_test.txt";
+	let test_content = "This file has custom metadata!";
+
+	// Create the test file
+	let source_file_path = Path::new(&source).join(test_file);
+	fs::write(&source_file_path, test_content)?;
+
+	// Set a specific modification time (30 seconds in the past)
+	let now = time::SystemTime::now();
+	let thirty_seconds_ago = now - time::Duration::from_secs(30);
+
+	// Set the file's modification time
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+
+		// Set file permissions to read-only for owner (0o400)
+		let mut perms = fs::metadata(&source_file_path)?.permissions();
+		perms.set_mode(0o400);
+		fs::set_permissions(&source_file_path, perms)?;
+	}
+
+	// Set modification time on all platforms
+	filetime::set_file_mtime(
+		&source_file_path,
+		filetime::FileTime::from_system_time(thirty_seconds_ago),
+	)?;
+
+	// Get original metadata for later comparison
+	let original_metadata = fs::metadata(&source_file_path)?;
+	let original_mtime = filetime::FileTime::from_last_modification_time(&original_metadata);
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups_meta")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the backup file
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	let backed_up_file = backup_set.path().join(test_file);
+	assert!(backed_up_file.exists(), "Backup file should exist");
+
+	// Compare metadata
+	let backup_metadata = fs::metadata(&backed_up_file)?;
+	let backup_mtime = filetime::FileTime::from_last_modification_time(&backup_metadata);
+
+	// Verify modification time is preserved
+	assert_eq!(
+		original_mtime, backup_mtime,
+		"Backup file should preserve modification time"
+	);
+
+	// Verify file permissions are preserved (Unix only)
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+
+		let original_mode = original_metadata.permissions().mode() & 0o777; // Only compare permission bits
+		let backup_mode = backup_metadata.permissions().mode() & 0o777;
+
+		assert_eq!(
+			original_mode, backup_mode,
+			"Backup file should preserve file permissions"
+		);
+	}
+
+	// Verify file size is preserved
+	assert_eq!(
+		original_metadata.len(),
+		backup_metadata.len(),
+		"Backup file should preserve file size"
+	);
+
+	Ok(())
+}
+
+#[test]
 fn test_backup_nested_file() -> Result<(), Box<dyn std::error::Error>> {
 	// Create source folder with nested structure
 	let source = create_tmp_folder("orig")?;
