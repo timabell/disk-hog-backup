@@ -2,18 +2,17 @@
 
 - Creates backups as normal folders
 	- Because you don't want to need fancy tooling to recover your backups in a panic
+- Simple, clear command-line interface (CLI)
+- Requires minimal user intervention.
 - Subsequent backups share identical files as hardlinks with previous backups
 	- Saving space without sacrificing backups as normal files and folders
-- Self-management of disk space
+- Automatic checksums - (but you do need to actually check them)
+	- Bit-rot is real!
+- No encryption / obfuscation / proprietary binary formats
+  - Because LVM+LUKS can do that at the filesystem layer and the last thing you want when restoring is a bunch of files you can't read.
+- Automatic spotting of lost/deleted/corrupt files since last backup (todo)
+- Self-management of disk space (todo)
 	- Keeping as many files and versions as possible in the available space, intended to make best use of external USB drives.
-- No encryption
-  - Because LVM+LUKS can do that at the filesystem layer
-- Automatic checksums and validation of new and existing backups
-	- Bit-rot is real
-- Require minimal user intervention.
-- Simple, clear command-line interface (CLI)
-- Reports of files that have gone missing based on previous checksums
-	- spot problems by making changes more visible
 
 # Work in progress!
 
