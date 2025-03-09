@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
@@ -26,12 +27,32 @@ pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io:
 		BackupContext::new(dest_path)
 	};
 
+	// Track ignored paths
+	let mut ignored_paths = HashSet::new();
+
 	// Process the files and directories using our custom ignore implementation
 	let source_path = Path::new(source);
-	process_directory(source_path, dest_path, prev_backup, &mut context)?;
+	process_directory(
+		source_path,
+		dest_path,
+		prev_backup,
+		&mut context,
+		&mut ignored_paths,
+	)?;
 
 	// Save the MD5 store
 	context.save_md5_store()?;
+
+	// Output summary of ignored paths
+	if !ignored_paths.is_empty() {
+		println!("\nIgnored paths summary:");
+		let mut sorted_paths: Vec<_> = ignored_paths.iter().collect();
+		sorted_paths.sort();
+		for path in sorted_paths {
+			println!("  {}", path);
+		}
+		println!("Total ignored paths: {}", ignored_paths.len());
+	}
 
 	// Calculate and display the total time taken
 	let duration = start_time.elapsed();
@@ -166,6 +187,7 @@ fn process_directory(
 	dest_path: &Path,
 	prev_backup: Option<&str>,
 	context: &mut BackupContext,
+	ignored_paths: &mut HashSet<String>,
 ) -> io::Result<()> {
 	// Create the destination directory if it doesn't exist
 	fs::create_dir_all(dest_path)?;
@@ -185,6 +207,7 @@ fn process_directory(
 		prev_backup,
 		context,
 		&ignore_manager,
+		ignored_paths,
 	)
 }
 
@@ -196,6 +219,7 @@ fn process_directory_recursive(
 	prev_backup: Option<&str>,
 	context: &mut BackupContext,
 	ignore_manager: &IgnoreManager,
+	ignored_paths: &mut HashSet<String>,
 ) -> io::Result<()> {
 	// Read the directory entries
 	for entry in fs::read_dir(current_path)? {
@@ -205,6 +229,7 @@ fn process_directory_recursive(
 		// Check if this entry should be ignored
 		if ignore_manager.should_ignore(&entry_path, base_path) {
 			println!("Ignoring: {}", entry_path.display());
+			ignored_paths.insert(entry_path.display().to_string());
 			continue;
 		}
 
@@ -255,6 +280,7 @@ fn process_directory_recursive(
 				prev_backup,
 				context,
 				&local_ignore_manager,
+				ignored_paths,
 			)?;
 		} else {
 			// Ensure parent directories exist
