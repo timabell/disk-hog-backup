@@ -571,6 +571,98 @@ fn get_inode(path: &Path) -> io::Result<u64> {
 	Ok(metadata.ino())
 }
 
+#[test]
+fn test_dhbignore_functionality() -> io::Result<()> {
+	// Set up source directory with test files
+	let source = create_tmp_folder("source_ignore")?;
+
+	// Create a .dhbignore file in the source directory
+	let dhbignore_content = r#"
+# This is a comment
+*.tmp
+build/
+node_modules/
+*.log
+!important.log
+"#;
+	fs::write(Path::new(&source).join(".dhbignore"), dhbignore_content)?;
+
+	// Create files that should be ignored
+	fs::write(Path::new(&source).join("temp.tmp"), "temporary file")?;
+	fs::create_dir_all(Path::new(&source).join("build"))?;
+	fs::write(
+		Path::new(&source).join("build").join("output.txt"),
+		"build output",
+	)?;
+	fs::create_dir_all(Path::new(&source).join("node_modules"))?;
+	fs::write(
+		Path::new(&source).join("node_modules").join("package.json"),
+		"{}",
+	)?;
+	fs::write(Path::new(&source).join("app.log"), "log file")?;
+
+	// Create files that should NOT be ignored
+	fs::write(Path::new(&source).join("important.log"), "important log")?;
+	fs::write(Path::new(&source).join("readme.txt"), "readme")?;
+	fs::create_dir_all(Path::new(&source).join("src").join("build"))?;
+	fs::write(
+		Path::new(&source)
+			.join("src")
+			.join("build")
+			.join("file.txt"),
+		"source build file",
+	)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups_ignore")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the backup set
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	// Check that ignored files are not in the backup
+	assert!(
+		!Path::new(&backup_set.path()).join("temp.tmp").exists(),
+		"*.tmp pattern should be ignored"
+	);
+	assert!(
+		!Path::new(&backup_set.path()).join("build").exists(),
+		"build/ directory should be ignored"
+	);
+	assert!(
+		!Path::new(&backup_set.path()).join("node_modules").exists(),
+		"node_modules/ directory should be ignored"
+	);
+	assert!(
+		!Path::new(&backup_set.path()).join("app.log").exists(),
+		"*.log pattern should be ignored"
+	);
+
+	// Check that non-ignored files are in the backup
+	assert!(
+		Path::new(&backup_set.path()).join("important.log").exists(),
+		"!important.log should not be ignored"
+	);
+	assert!(
+		Path::new(&backup_set.path()).join("readme.txt").exists(),
+		"readme.txt should not be ignored"
+	);
+
+	Ok(())
+}
+
 fn disk_hog_backup_cmd() -> Command {
 	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }
