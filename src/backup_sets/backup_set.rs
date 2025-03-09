@@ -1,5 +1,3 @@
-use crate::backup_sets::set_namer::generate_name;
-use chrono::Utc;
 use std::fs;
 use std::path::Path;
 
@@ -37,4 +35,10 @@ pub fn find_most_recent_set(dest: &str) -> Option<String> {
 		}
 		Err(_) => None,
 	}
+}
+
+/// Find the most recent backup set and return its full path
+pub fn find_most_recent_backup_set(dest: &str) -> Option<String> {
+	find_most_recent_set(dest)
+		.map(|set_name| Path::new(dest).join(set_name).to_string_lossy().to_string())
 }

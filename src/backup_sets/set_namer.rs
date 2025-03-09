@@ -16,6 +16,11 @@ where
 	)
 }
 
+/// Generate a backup set name using the current time
+pub fn generate_backup_set_name() -> String {
+	generate_name(|| Utc::now())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

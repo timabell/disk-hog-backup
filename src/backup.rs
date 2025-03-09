@@ -1,36 +1,38 @@
-use crate::backup_sets::backup_set::{create_empty_set, find_most_recent_set};
-use crate::dhcopy::copy_folder::copy_folder;
-use chrono::Utc;
 use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::backup_sets::backup_set;
+use crate::backup_sets::set_namer;
+use crate::dhcopy::copy_folder;
+
 pub fn backup(source: &str, dest: &str) -> io::Result<String> {
+	// Create the backup destination directory if it doesn't exist
 	fs::create_dir_all(dest)?;
 
-	// Find the most recent backup set, if any
-	let prev_set = find_most_recent_set(dest);
-	let prev_set_path = prev_set.as_ref().map(|set| Path::new(dest).join(set));
+	// Find the most recent backup set to use for hardlinking
+	let prev_backup = backup_set::find_most_recent_backup_set(dest);
 
 	// Create a new backup set
-	let set_name = create_empty_set(dest, Utc::now)?;
-	let dest_folder = Path::new(dest).join(&set_name);
+	let backup_set_name = set_namer::generate_backup_set_name();
+	let backup_set_path = Path::new(dest).join(&backup_set_name);
+	fs::create_dir_all(&backup_set_path)?;
 
-	println!("Backing up {} into {:?} …", source, dest_folder);
-	if let Some(prev_set) = prev_set {
+	println!("Backing up {} into {:?} …", source, backup_set_path);
+	if let Some(ref prev_backup) = prev_backup {
 		println!(
 			"Found previous backup set to use for hard-linking: {}",
-			prev_set
+			prev_backup
 		);
 	}
 
-	// Pass the previous backup set path to the copy function
-	copy_folder(
+	// Copy the source folder to the backup set, using hardlinks for unchanged files
+	copy_folder::backup_folder(
 		source,
-		dest_folder.to_str().unwrap(),
-		prev_set_path.as_ref().map(|p| p.to_str().unwrap()),
+		backup_set_path.to_str().unwrap(),
+		prev_backup.as_deref(),
 	)?;
 
-	println!("Backing completed of {} into {:?}", source, dest_folder);
-	Ok(set_name)
+	println!("Backing completed of {} into {:?}", source, backup_set_path);
+	Ok(backup_set_name)
 }
