@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use chrono;
-use rand::Rng;
+use predicates;
+use rand::{Rng, thread_rng};
+use rand::prelude::*;
 use std::env;
 use std::fs;
 use std::io;
@@ -479,13 +481,83 @@ fn get_inode(path: &Path) -> io::Result<u64> {
 	Ok(metadata.ino())
 }
 
+#[test]
+fn test_verify_backup_set_hashes() -> Result<(), Box<dyn std::error::Error>> {
+	// Set up source directory with multiple test files
+	let source = create_tmp_folder("source")?;
+
+	// Create test files with different contents
+	let file1 = "file1.txt";
+	let file2 = "nested/file2.txt";
+	let file3 = "large_file.bin";
+	
+	let content1 = "This is file 1 content";
+	let content2 = "This is file 2 content in a nested directory";
+	
+	// Create directory structure
+	fs::create_dir_all(Path::new(&source).join("nested"))?;
+	
+	// Create regular text files
+	create_test_file(&source, file1, content1)?;
+	create_test_file(&source, file2, content2)?;
+	
+	// Create a larger binary file
+	let large_file_path = Path::new(&source).join(file3);
+	let mut large_file = fs::File::create(&large_file_path)?;
+	let random_data: Vec<u8> = thread_rng().sample_iter(Standard).take(1024 * 100).collect(); // 100KB of random data
+	io::Write::write_all(&mut large_file, &random_data)?;
+	
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups")?;
+	
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+	
+	// Find the backup set
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 1, "Should create exactly one backup set");
+	let backup_set_path = backup_sets[0].path();
+	
+	// Run verify command on the backup set - should succeed with intact files
+	disk_hog_backup_cmd()
+		.arg("--verify")
+		.arg(backup_set_path.to_string_lossy().to_string())
+		.assert()
+		.success();
+	
+	// Tamper with a file in the backup set
+	let tampered_file_path = backup_set_path.join(file1);
+	create_test_file(
+		&backup_set_path.to_string_lossy().to_string(),
+		file1,
+		"This file has been tampered with!",
+	)?;
+	
+	// Run verify command again - should fail with tampered file
+	let assert = disk_hog_backup_cmd()
+		.arg("--verify")
+		.arg(backup_set_path.to_string_lossy().to_string())
+		.assert();
+	
+	// Verify that the command failed and the output contains information about the tampered file
+	assert.failure().stderr(predicates::str::contains(file1));
+	
+	Ok(())
+}
+
 fn disk_hog_backup_cmd() -> Command {
 	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
-	let mut rng = rand::rng();
-	let random_suffix: u32 = rng.random();
+	let mut rng = rand::thread_rng();
+	let random_suffix: u32 = rng.gen();
 	let dir = env::temp_dir().join(format!("dhb-{}-{}", prefix, random_suffix));
 	fs::create_dir_all(&dir)?;
 	println!("Created temp folder: {}", dir.to_string_lossy());

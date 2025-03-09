@@ -327,3 +327,20 @@ fn monitor_md5(
 	}
 	Ok(false)
 }
+
+/// Calculate the MD5 hash of a file
+pub fn calculate_md5(file_path: &Path) -> io::Result<[u8; 16]> {
+	let mut file = File::open(file_path)?;
+	let mut context = Context::new();
+	let mut buffer = vec![0; CHUNK_SIZE];
+
+	loop {
+		let bytes_read = file.read(&mut buffer)?;
+		if bytes_read == 0 {
+			break;
+		}
+		context.consume(&buffer[..bytes_read]);
+	}
+
+	Ok(context.compute().0)
+}
