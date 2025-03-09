@@ -663,6 +663,50 @@ node_modules/
 	Ok(())
 }
 
+#[test]
+fn test_backup_of_hidden_file() -> io::Result<()> {
+	// Set up source directory with a hidden file
+	let source = create_tmp_folder("source_hidden")?;
+
+	// Create a hidden file in the source directory
+	fs::write(
+		Path::new(&source).join(".hidden_file"),
+		"hidden file content",
+	)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("backups_hidden")?;
+
+	// Run backup command
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the backup set
+	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_set = backup_sets
+		.filter_map(Result::ok)
+		.next()
+		.expect("Should have created a backup set");
+
+	// Check that the hidden file was backed up
+	let hidden_file_path = Path::new(&backup_set.path()).join(".hidden_file");
+	assert!(hidden_file_path.exists(), "Hidden file should be backed up");
+
+	// Check the content of the hidden file
+	let content = fs::read_to_string(hidden_file_path)?;
+	assert_eq!(
+		content, "hidden file content",
+		"Hidden file content should match"
+	);
+
+	Ok(())
+}
+
 fn disk_hog_backup_cmd() -> Command {
 	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
 }

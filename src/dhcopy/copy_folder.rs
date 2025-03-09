@@ -69,10 +69,13 @@ fn process_directory(
 	// Configure WalkBuilder to use .dhbignore files
 	let mut builder = WalkBuilder::new(source_path);
 
+	// Add .dhbignore as a custom ignore file
+	builder.add_custom_ignore_filename(".dhbignore");
+
 	// Don't follow symlinks to avoid cycles
 	builder.follow_links(false);
 
-	// Turn off default filters to avoid missing files we should be backing up (hidden, git etc)
+	// ignore crate comes with set of default ignores that we *reall* don't want active for a *backup* tool
 	builder.standard_filters(false);
 
 	// Process each entry in the walk
