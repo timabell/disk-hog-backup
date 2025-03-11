@@ -83,10 +83,10 @@ pub fn copy_file_with_streaming(
 						let src_hash_hex = format_md5_hash(src_hash);
 
 						if hardlinked {
-							println!("Hardlinked: {} (MD5: {})", dst_path.display(), src_hash_hex);
+							println!("  Hardlinked: {} (MD5: {})", dst_path.display(), src_hash_hex);
 						} else {
 							println!(
-								"Copied: {} (MD5 changed: {} -> {})",
+								"  Copied: {} (MD5 changed: {} -> {})",
 								dst_path.display(),
 								prev_hash_hex,
 								src_hash_hex
@@ -117,7 +117,7 @@ pub fn copy_file_with_streaming(
 	let (_, src_hash) = stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None)?;
 
 	let src_hash_hex = format_md5_hash(src_hash);
-	println!("Copied: {} (MD5: {})", dst_path.display(), src_hash_hex);
+	println!("  Copied: {} (New, MD5: {})", dst_path.display(), src_hash_hex);
 
 	// Preserve file metadata (timestamps, permissions)
 	copy_file_metadata(src_path, dst_path)?;
