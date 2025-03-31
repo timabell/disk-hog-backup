@@ -8,7 +8,7 @@ description = "A tool for backing up to external disk, making best use of the av
 
 [dependencies]
 chrono = "0.4.40"
-clap = { version = "4.5.31", features = ["derive"] }
+clap = { version = "4.5.34", features = ["derive"] }
 crossbeam = "0.8.4"
 filetime = "0.2.23"
 md5 = "0.7.0"
