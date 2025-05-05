@@ -7,7 +7,7 @@ repository = "https://github.com/timabell/disk-hog-backup"
 description = "A tool for backing up to external disk, making best use of the available space "
 
 [dependencies]
-chrono = "0.4.40"
+chrono = "0.4.41"
 clap = { version = "4.5.31", features = ["derive"] }
 crossbeam = "0.8.4"
 filetime = "0.2.23"
