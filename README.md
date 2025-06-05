@@ -108,15 +108,33 @@ The `.dhbignore` file supports the following pattern syntax:
 ## Example .dhbignore File
 
 ```
-# Temporary files
-*.tmp
-*.temp
-*.swp
+# ignore anywhere
+.cache/
+.thumbnails/
 
-# Build directories
-build/
-dist/
-node_modules/
+# ignore at root of source only
+/.asdf
+/.dbus
+/.dropbox
+/.gvs
+/.hplip
+/.java
+/.local/share/Trash/
+/.npm
+/.nuget
+/VirtalBox VMs
+/docker
+/no-sync
+
+# ignore flatpack installs
+/.var/app
+
+# ignore Virtual disk images anywhere
+*.vdi
+
+
+# This is ~/tmp not actually /tmp
+/tmp
 
 # Log files, except important ones
 *.log
