@@ -92,9 +92,9 @@ impl IgnorePattern {
 
 		// Handle regular patterns with or without wildcards
 		if self.attributes.has_wildcards {
-			return self.matches_with_wildcards(&path_str, &filename);
+			self.matches_with_wildcards(&path_str, &filename)
 		} else {
-			return self.matches_exact(&path_str, &filename);
+			self.matches_exact(&path_str, &filename)
 		}
 	}
 
