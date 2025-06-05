@@ -76,35 +76,28 @@ pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io:
 	Ok(())
 }
 
-/// Different types of ignore patterns
+/// The type of an ignore pattern
 #[derive(Clone)]
 enum PatternType {
-	/// Exact match (e.g., "file.txt")
-	Exact(String),
-	/// Prefix wildcard (e.g., "*.txt")
-	Suffix(String),
-	/// Suffix wildcard (e.g., "prefix*")
-	Prefix(String),
-	/// Substring wildcard (e.g., "*substring*")
-	Contains(String),
-	/// Complex wildcard with multiple * (e.g., "a*b*c")
-	Complex(Vec<String>),
-	/// Directory pattern (e.g., "dir/")
-	Directory { name: String, has_wildcards: bool },
-	/// Absolute path pattern (e.g., "/path")
-	Absolute(String),
+	/// Regular pattern (may contain wildcards)
+	Regular,
+	/// Directory pattern (ends with '/', matches directory and all its contents)
+	Directory,
+	/// Absolute pattern (starts with '/', matches from root)
+	Absolute,
 }
 
 /// Represents a single ignore pattern
 #[derive(Clone)]
 struct IgnorePattern {
-	original: String,
+	pattern: String,
 	pattern_type: PatternType,
 	is_negated: bool,
 }
 
 impl IgnorePattern {
 	fn new(pattern: &str) -> Self {
+		// Check if the pattern is negated
 		let is_negated = pattern.starts_with('!');
 		let pattern = if is_negated {
 			pattern[1..].to_string()
@@ -112,37 +105,17 @@ impl IgnorePattern {
 			pattern.to_string()
 		};
 
-		let original = pattern.clone();
+		// Determine pattern type
 		let pattern_type = if pattern.ends_with('/') {
-			// Directory pattern
-			let name = pattern[..pattern.len() - 1].to_string();
-			PatternType::Directory {
-				name: name.clone(),
-				has_wildcards: name.contains('*'),
-			}
+			PatternType::Directory
 		} else if pattern.starts_with('/') {
-			// Absolute pattern
-			PatternType::Absolute(pattern[1..].to_string())
-		} else if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 1 {
-			// *substring* pattern
-			PatternType::Contains(pattern[1..pattern.len() - 1].to_string())
-		} else if pattern.starts_with('*') {
-			// *.ext pattern
-			PatternType::Suffix(pattern[1..].to_string())
-		} else if pattern.ends_with('*') {
-			// prefix* pattern
-			PatternType::Prefix(pattern[..pattern.len() - 1].to_string())
-		} else if pattern.contains('*') {
-			// Complex pattern with multiple wildcards
-			let parts: Vec<String> = pattern.split('*').map(|s| s.to_string()).collect();
-			PatternType::Complex(parts)
+			PatternType::Absolute
 		} else {
-			// Exact match
-			PatternType::Exact(pattern)
+			PatternType::Regular
 		};
 
 		Self {
-			original,
+			pattern,
 			pattern_type,
 			is_negated,
 		}
@@ -162,126 +135,88 @@ impl IgnorePattern {
 			.map(|f| f.to_string_lossy())
 			.unwrap_or_default();
 
-		match &self.pattern_type {
-			PatternType::Exact(pattern) => self.matches_exact(pattern, &path_str, &filename),
-			PatternType::Suffix(suffix) => path_str.ends_with(suffix) || filename.ends_with(suffix),
-			PatternType::Prefix(prefix) => {
-				path_str.starts_with(prefix) || filename.starts_with(prefix)
-			}
-			PatternType::Contains(substring) => {
-				path_str.contains(substring) || filename.contains(substring)
-			}
-			PatternType::Complex(parts) => {
-				self.matches_complex(parts, &path_str) || self.matches_complex(parts, &filename)
-			}
-			PatternType::Directory {
-				name,
-				has_wildcards,
-			} => self.matches_directory(name, *has_wildcards, path, &path_str),
-			PatternType::Absolute(pattern) => {
-				path_str == *pattern || path_str.starts_with(&format!("{}/", pattern))
-			}
+		match self.pattern_type {
+			PatternType::Regular => self.matches_regular(&path_str, &filename),
+			PatternType::Directory => self.matches_directory(&path_str, path),
+			PatternType::Absolute => self.matches_absolute(&path_str),
 		}
 	}
 
-	/// Match exact patterns at any level
-	fn matches_exact(&self, pattern: &str, path_str: &str, filename: &str) -> bool {
-		// Exact match
-		if path_str == pattern {
-			return true;
-		}
+	/// Match a regular pattern (may contain wildcards)
+	fn matches_regular(&self, path_str: &str, filename: &str) -> bool {
+		// Check if the pattern contains wildcards
+		if self.pattern.contains('*') {
+			// With wildcards, check each component
+			let components: Vec<&str> = path_str.split('/').collect();
 
-		// Check if it's a direct child of the directory
-		if path_str.starts_with(&format!("{}/", pattern)) {
-			return true;
-		}
-
-		// Check if any path component matches exactly
-		let components: Vec<&str> = path_str.split('/').collect();
-		if components.contains(&pattern) {
-			return true;
-		}
-
-		// Check if filename matches
-		filename == pattern
-	}
-
-	/// Match complex wildcard patterns
-	fn matches_complex(&self, parts: &[String], s: &str) -> bool {
-		if parts.is_empty() {
-			return true; // Pattern is just "*"
-		}
-
-		let mut remaining = s;
-
-		// Check if the pattern starts with a non-* character
-		if parts[0].len() > 0 && !remaining.starts_with(&parts[0]) {
-			return false;
-		}
-
-		// Check if the pattern ends with a non-* character
-		if parts.last().unwrap().len() > 0 && !remaining.ends_with(parts.last().unwrap()) {
-			return false;
-		}
-
-		// Check all parts in order
-		for part in parts {
-			if part.is_empty() {
-				continue; // Skip empty parts (consecutive *'s)
+			// Check if any component or the filename matches the pattern
+			components
+				.iter()
+				.any(|component| self.matches_wildcard(component, &self.pattern))
+				|| self.matches_wildcard(filename, &self.pattern)
+		} else {
+			// Without wildcards, check for exact matches
+			if path_str == self.pattern {
+				return true;
 			}
 
-			match remaining.find(part) {
-				Some(pos) => {
-					// Move past this part in the remaining string
-					remaining = &remaining[pos + part.len()..];
-				}
-				None => return false,
+			// Check if path starts with pattern/ (direct child)
+			if path_str.starts_with(&format!("{}/", self.pattern)) {
+				return true;
 			}
-		}
 
-		true
+			// Check if any path component matches exactly
+			let components: Vec<&str> = path_str.split('/').collect();
+			if components.contains(&&self.pattern[..]) {
+				return true;
+			}
+
+			// Check if filename matches exactly
+			filename == self.pattern
+		}
 	}
 
-	/// Match directory patterns
-	fn matches_directory(
-		&self,
-		dir_name: &str,
-		has_wildcards: bool,
-		path: &Path,
-		path_str: &str,
-	) -> bool {
-		// Split the path into components
-		let components: Vec<&str> = path_str.split('/').collect();
+	/// Match a directory pattern
+	fn matches_directory(&self, path_str: &str, path: &Path) -> bool {
+		// Remove the trailing slash
+		let dir_pattern = &self.pattern[..self.pattern.len() - 1];
 
-		if has_wildcards {
+		// Check if the pattern contains wildcards
+		if dir_pattern.contains('*') {
+			// With wildcards, check each component
+			let components: Vec<&str> = path_str.split('/').collect();
+
 			// Check if any component matches the wildcard pattern
 			for (i, component) in components.iter().enumerate() {
-				if self.matches_wildcard_component(component, dir_name) {
-					// If this component matches and it's not the last component,
-					// then the path is inside a directory that matches the pattern
+				if self.matches_wildcard(component, dir_pattern) {
+					// If matching component isn't the last part, path is inside matching dir
 					if i < components.len() - 1 {
 						return true;
 					}
-					// If it's the last component, it matches only if it's a directory
+					// If it's the last component, only match if it's a directory
 					else if path.is_dir() {
 						return true;
 					}
 				}
 			}
+			false
 		} else {
-			// Check if path is exactly this directory
-			if path_str == dir_name && path.is_dir() {
+			// Without wildcards
+
+			// Exact match for a directory
+			if path_str == dir_pattern && path.is_dir() {
 				return true;
 			}
 
-			// Check if path starts with this directory name followed by a slash
-			if path_str.starts_with(&format!("{}/", dir_name)) {
+			// Path inside this directory
+			if path_str.starts_with(&format!("{}/", dir_pattern)) {
 				return true;
 			}
 
-			// Check if any path component matches the directory name
+			// Check for matching directory components
+			let components: Vec<&str> = path_str.split('/').collect();
 			for (i, &component) in components.iter().enumerate() {
-				if component == dir_name {
+				if component == dir_pattern {
 					// If this component matches and it's not the last component,
 					// then the path is inside a directory that matches the pattern
 					if i < components.len() - 1 {
@@ -293,13 +228,21 @@ impl IgnorePattern {
 					}
 				}
 			}
+			false
 		}
-
-		false
 	}
 
-	/// Check if a string component matches a wildcard pattern
-	fn matches_wildcard_component(&self, s: &str, pattern: &str) -> bool {
+	/// Match an absolute pattern
+	fn matches_absolute(&self, path_str: &str) -> bool {
+		// Remove the leading slash
+		let abs_pattern = &self.pattern[1..];
+
+		// Exact match or direct child
+		path_str == abs_pattern || path_str.starts_with(&format!("{}/", abs_pattern))
+	}
+
+	/// Check if a string matches a wildcard pattern
+	fn matches_wildcard(&self, s: &str, pattern: &str) -> bool {
 		if !pattern.contains('*') {
 			return s == pattern;
 		}
