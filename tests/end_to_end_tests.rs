@@ -571,92 +571,120 @@ fn get_inode(path: &Path) -> io::Result<u64> {
 
 #[test]
 fn test_dhbignore_functionality() -> io::Result<()> {
-	// Set up source directory with test files
+	// Arrange
 	let source = create_tmp_folder("source_ignore")?;
+	let destination = create_tmp_folder("backups_ignore")?;
 
-	// Create a .dhbignore file in the source directory
-	let dhbignore_content = r#"
-# This is a comment
+	create_test_file(
+		&source,
+		".dhbignore",
+		r#"
+# This comment should be ignored without error
+# Format roughly based on https://git-scm.com/docs/gitignore
+
+# wildcards
 *.tmp
+*temp*
+bad*news
+nope-*
+
+# match exact file or folder at any depth
+evil
+
+# match only folders when trailing slash present, at any depth
 build/
-node_modules/
+snowflake/
+bing*bong/
+
+# absolute paths - only match at root level
+alpha/beta
+alpha/delta/
+/gamma
+/root-file.txt
+/nested/absolute/specific-file.txt
+
+# negation: ignore log and then exclude one file from that
 *.log
 !important.log
-"#;
-	fs::write(Path::new(&source).join(".dhbignore"), dhbignore_content)?;
 
-	// Create files that should be ignored
-	fs::write(Path::new(&source).join("temp.tmp"), "temporary file")?;
-	fs::create_dir_all(Path::new(&source).join("build"))?;
-	fs::write(
-		Path::new(&source).join("build").join("output.txt"),
-		"build output",
-	)?;
-	fs::create_dir_all(Path::new(&source).join("node_modules"))?;
-	fs::write(
-		Path::new(&source).join("node_modules").join("package.json"),
-		"{}",
-	)?;
-	fs::write(Path::new(&source).join("app.log"), "log file")?;
-
-	// Create files that should NOT be ignored
-	fs::write(Path::new(&source).join("important.log"), "important log")?;
-	fs::write(Path::new(&source).join("readme.txt"), "readme")?;
-	fs::create_dir_all(Path::new(&source).join("src").join("build"))?;
-	fs::write(
-		Path::new(&source)
-			.join("src")
-			.join("build")
-			.join("file.txt"),
-		"source build file",
+"#,
 	)?;
 
-	// Create backup destination
-	let backup_root = create_tmp_folder("backups_ignore")?;
+	let ignored_files = vec![
+		"ignore-me.tmp",
+		"nested/ignore-me.tmp",
+		"nope-1234",
+		"nope-456/bar.txt",
+		"evil",
+		"nested/foo/evil",
+		"nested/folder/snowflake/ice.txt",
+		"nested/evil/monkey.txt",
+		"build/output.txt",
+		"nested/build/output.txt",
+		"nested/really/deeply/build/output.txt",
+		"bing-bang-bong/something.txt",
+		"alpha/beta/foo.txt",
+		"alpha/delta/foo.txt",
+		"gamma/foo.txt",
+		"root-file.txt",
+		"nested/absolute/specific-file.txt",
+		"unimportant.log",
+	];
+	for path in &ignored_files {
+		create_test_file(&source, path, "ignored file")?;
+	}
 
+	let kept_files = vec![
+		"dont-ignore-me.txt",
+		"nested/not-evil/monkey.txt",
+		"nested/inner/build",
+		"nested/alpha/beta/foo.txt",
+		"nested/alpha/delta/foo.txt",
+		"nested/gamma/foo.txt",
+		"nested/really/deeply/foo.txt",
+		"nested/file/snowflake",
+		"nested/root-file.txt",
+		"specific-file.txt",
+		"nested/specific-file.txt",
+		"not-root/nested/absolute/specific-file.txt",
+		"important.log",
+	];
+	for path in &kept_files {
+		create_test_file(&source, path, "kept file")?;
+	}
+
+	// Act
 	// Run backup command
 	disk_hog_backup_cmd()
 		.arg("--source")
 		.arg(&source)
 		.arg("--destination")
-		.arg(&backup_root)
+		.arg(&destination)
 		.assert()
 		.success();
 
+	// Assert
 	// Find the backup set
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = fs::read_dir(&destination)?;
 	let backup_set = backup_sets
 		.filter_map(Result::ok)
 		.next()
 		.expect("Should have created a backup set");
 
-	// Check that ignored files are not in the backup
-	assert!(
-		!Path::new(&backup_set.path()).join("temp.tmp").exists(),
-		"*.tmp pattern should be ignored"
-	);
-	assert!(
-		!Path::new(&backup_set.path()).join("build").exists(),
-		"build/ directory should be ignored"
-	);
-	assert!(
-		!Path::new(&backup_set.path()).join("node_modules").exists(),
-		"node_modules/ directory should be ignored"
-	);
-	assert!(
-		!Path::new(&backup_set.path()).join("app.log").exists(),
-		"*.log pattern should be ignored"
-	);
-
-	// Check that non-ignored files are in the backup
-	assert!(
-		Path::new(&backup_set.path()).join("important.log").exists(),
-		"!important.log should not be ignored"
-	);
-	assert!(
-		Path::new(&backup_set.path()).join("readme.txt").exists(),
-		"readme.txt should not be ignored"
-	);
+	for path in ignored_files {
+		assert!(
+			!Path::new(&backup_set.path()).join(path).exists(),
+			"'{}' should be ignored",
+			path
+		);
+	}
+	for path in kept_files {
+		assert!(
+			Path::new(&backup_set.path()).join(path).exists(),
+			"'{}' should be kept",
+			path
+		);
+	}
 
 	Ok(())
 }
@@ -782,9 +810,13 @@ pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
 	Ok(dir.to_string_lossy().into_owned())
 }
 
-pub fn create_test_file(folder: &str, filename: &str, contents: &str) -> io::Result<()> {
-	let file_path = Path::new(folder).join(filename);
-	let mut file = fs::File::create(file_path)?;
+pub fn create_test_file(base_folder: &str, path: &str, contents: &str) -> io::Result<()> {
+	// create folder if missing:
+	let path = Path::new(base_folder).join(path);
+	fs::create_dir_all(path.parent().unwrap())?;
+	// create file
+	let mut file = fs::File::create(path)?;
+	// write contents
 	io::Write::write_all(&mut file, contents.as_bytes())?;
 	Ok(())
 }

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self};
 use std::path::Path;
 use std::time::Instant;
 
@@ -9,6 +9,7 @@ use crate::dhcopy::streaming_copy::{BackupContext, copy_file_with_streaming};
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
+use crate::dhcopy::ignore_patterns::IgnoreManager;
 #[cfg(windows)]
 use std::os::windows::fs::{symlink_dir, symlink_file};
 
@@ -76,111 +77,6 @@ pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io:
 	Ok(())
 }
 
-/// A pattern for ignoring files
-#[derive(Clone)]
-struct IgnorePattern {
-	pattern: String,
-	is_negated: bool,
-}
-
-impl IgnorePattern {
-	fn new(pattern: &str) -> Self {
-		let is_negated = pattern.starts_with('!');
-		let pattern = if is_negated {
-			pattern[1..].to_string()
-		} else {
-			pattern.to_string()
-		};
-
-		Self {
-			pattern,
-			is_negated,
-		}
-	}
-
-	/// Check if a path matches this pattern
-	fn matches(&self, path: &Path, base_dir: &Path) -> bool {
-		// Get the relative path from the base directory
-		let rel_path = match path.strip_prefix(base_dir) {
-			Ok(p) => p,
-			Err(_) => return false,
-		};
-
-		let path_str = rel_path.to_string_lossy();
-
-		// Simple glob matching
-		if self.pattern.starts_with("*") {
-			// *.ext pattern
-			let suffix = &self.pattern[1..];
-			path_str.ends_with(suffix)
-		} else if self.pattern.ends_with("/") {
-			// directory/ pattern
-			let dir_name = &self.pattern[..self.pattern.len() - 1];
-			path.is_dir()
-				&& (path_str == dir_name || path_str.starts_with(&format!("{}/", dir_name)))
-		} else {
-			// Exact match or prefix match for directories
-			path_str == self.pattern
-				|| (path.is_dir() && path_str.starts_with(&format!("{}/", self.pattern)))
-		}
-	}
-}
-
-/// Manager for ignore patterns
-struct IgnoreManager {
-	patterns: Vec<IgnorePattern>,
-}
-
-impl IgnoreManager {
-	fn new() -> Self {
-		Self {
-			patterns: Vec::new(),
-		}
-	}
-
-	/// Load patterns from a .dhbignore file
-	fn load_from_file(&mut self, ignore_file: &Path) -> io::Result<()> {
-		if !ignore_file.exists() {
-			return Ok(());
-		}
-
-		let file = fs::File::open(ignore_file)?;
-		let reader = BufReader::new(file);
-
-		for line in reader.lines() {
-			let line = line?;
-			let line = line.trim();
-
-			// Skip empty lines and comments
-			if line.is_empty() || line.starts_with('#') {
-				continue;
-			}
-
-			self.patterns.push(IgnorePattern::new(line));
-		}
-
-		Ok(())
-	}
-
-	/// Check if a path should be ignored
-	fn should_ignore(&self, path: &Path, base_dir: &Path) -> bool {
-		let mut should_ignore = false;
-
-		for pattern in &self.patterns {
-			if pattern.matches(path, base_dir) {
-				// If it's a negated pattern, we explicitly include it
-				if pattern.is_negated {
-					return false;
-				}
-				// Otherwise, mark it for ignoring
-				should_ignore = true;
-			}
-		}
-
-		should_ignore
-	}
-}
-
 /// Process a directory using our custom ignore implementation
 fn process_directory(
 	source_path: &Path,
@@ -196,7 +92,7 @@ fn process_directory(
 	let mut ignore_manager = IgnoreManager::new();
 	let ignore_file = source_path.join(".dhbignore");
 	if ignore_file.exists() {
-		ignore_manager.load_from_file(&ignore_file)?;
+		ignore_manager.load_patterns_from_file(&ignore_file)?;
 	}
 
 	// Process the directory recursively
@@ -289,7 +185,7 @@ fn process_directory_recursive(
 
 			// Add any local ignore patterns
 			if local_ignore_file.exists() {
-				local_ignore_manager.load_from_file(&local_ignore_file)?;
+				local_ignore_manager.load_patterns_from_file(&local_ignore_file)?;
 			}
 
 			// Process this directory recursively
