@@ -141,7 +141,6 @@ fn copy_file_metadata(src_path: &Path, dst_path: &Path) -> io::Result<()> {
 	// Copy file permissions
 	#[cfg(unix)]
 	{
-		use std::os::unix::fs::PermissionsExt;
 		let permissions = src_metadata.permissions();
 		fs::set_permissions(dst_path, permissions)?;
 	}

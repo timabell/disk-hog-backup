@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use chrono;
-use rand::Rng;
 use std::env;
 use std::fs;
 use std::io;
