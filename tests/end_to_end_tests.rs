@@ -1,5 +1,4 @@
 use assert_cmd::Command;
-use chrono;
 use std::env;
 use std::fs;
 use std::io;
@@ -305,7 +304,7 @@ fn test_backup_with_symlinks() -> io::Result<()> {
 	let target_dir = Path::new(&source).join("target_dir");
 	fs::create_dir(&target_dir)?;
 	create_test_file(
-		&target_dir.to_str().unwrap(),
+		target_dir.to_str().unwrap(),
 		"target.txt",
 		"target content",
 	)?;

@@ -168,7 +168,7 @@ impl Md5Store {
 	fn create_md5_checksum_of_md5_file(md5_file_path: &PathBuf) -> io::Result<()> {
 		let md5_checksum_path = md5_file_path.with_file_name(format!("{}.md5", MD5_FILENAME));
 
-		let md5_content = std::fs::read(&md5_file_path)?;
+		let md5_content = std::fs::read(md5_file_path)?;
 
 		let mut hasher = Md5Context::new();
 		hasher.consume(&md5_content);
@@ -245,7 +245,7 @@ mod tests {
 		{
 			let mut file = File::create(&md5_file_path).unwrap();
 			writeln!(file, "# Comment line").unwrap();
-			writeln!(file, "").unwrap();
+			writeln!(file).unwrap();
 			writeln!(file, "0102030405060708090a0b0c0d0e0f10  valid_file.txt").unwrap();
 			writeln!(file, "invalid_hash  file_with_invalid_hash.txt").unwrap();
 			writeln!(file, "0102030405060708090a0b0c0d0e0f10").unwrap();
