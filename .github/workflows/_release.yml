@@ -22,7 +22,7 @@ jobs:
 
     - name: Generate Release Notes
       id: changelog
-      uses: orhun/git-cliff-action@v2
+      uses: orhun/git-cliff-action@v4
       with:
         config: cliff.toml
         args: --latest --strip header
@@ -48,7 +48,7 @@ jobs:
 #        sha256sum disk-hog-backup-linux-x86_64.tar.gz disk-hog-backup-windows-x86_64.zip disk-hog-backup-macos-x86_64.tar.gz > SHA256SUMS.txt
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         body: ${{ steps.changelog.outputs.content }}
         files: |
