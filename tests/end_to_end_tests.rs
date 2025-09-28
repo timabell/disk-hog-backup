@@ -303,11 +303,7 @@ fn test_backup_with_symlinks() -> io::Result<()> {
 	// Create a symlink to a directory
 	let target_dir = Path::new(&source).join("target_dir");
 	fs::create_dir(&target_dir)?;
-	create_test_file(
-		target_dir.to_str().unwrap(),
-		"target.txt",
-		"target content",
-	)?;
+	create_test_file(target_dir.to_str().unwrap(), "target.txt", "target content")?;
 
 	let dir_symlink_path = Path::new(&source).join("link_to_dir");
 	std::os::unix::fs::symlink(&target_dir, &dir_symlink_path)?;
