@@ -44,6 +44,9 @@ pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io:
 	// Save the MD5 store
 	context.save_md5_store()?;
 
+	// Save the backup statistics
+	context.save_stats()?;
+
 	// Output summary of ignored paths
 	if !ignored_paths.is_empty() {
 		println!("\nIgnored paths summary:");

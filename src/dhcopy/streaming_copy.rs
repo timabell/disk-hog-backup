@@ -13,6 +13,7 @@ use std::{
 	time::Duration,
 };
 
+use crate::backup_sets::backup_stats::BackupStats;
 use crate::backup_sets::md5_store::Md5Store;
 
 const CHUNK_SIZE: usize = 256 * 1024; // 256KB per chunk
@@ -26,6 +27,7 @@ static GLOBAL_MEMORY_USAGE: AtomicUsize = AtomicUsize::new(0);
 pub struct BackupContext {
 	pub md5_store: Option<Md5Store>,
 	pub new_md5_store: Md5Store,
+	pub stats: BackupStats,
 }
 
 impl BackupContext {
@@ -33,21 +35,28 @@ impl BackupContext {
 		BackupContext {
 			md5_store: None,
 			new_md5_store: Md5Store::new(backup_root),
+			stats: BackupStats::new(backup_root),
 		}
 	}
 
 	pub fn with_previous_backup(backup_root: &Path, prev_backup: &Path) -> io::Result<Self> {
 		let md5_store = Md5Store::load_from_backup(prev_backup)?;
 		let new_md5_store = Md5Store::new(backup_root);
+		let stats = BackupStats::new(backup_root);
 
 		Ok(BackupContext {
 			md5_store: Some(md5_store),
 			new_md5_store,
+			stats,
 		})
 	}
 
 	pub fn save_md5_store(&self) -> io::Result<()> {
 		self.new_md5_store.save()
+	}
+
+	pub fn save_stats(&self) -> io::Result<()> {
+		self.stats.save()
 	}
 }
 
@@ -58,13 +67,19 @@ pub fn copy_file_with_streaming(
 	rel_path: &Path,
 	context: &mut BackupContext,
 ) -> io::Result<bool> {
+	// Get the source file size for statistics
+	let src_metadata = src_path.metadata()?;
+	let file_size = src_metadata.len();
+
+	// Track that we're processing this file
+	context.stats.add_file_processed(file_size);
+
 	// Check if we have a previous backup to compare with
 	if let Some(prev) = prev_path
 		&& prev.exists()
 		&& !prev.is_dir()
 	{
 		// First check if file sizes match
-		let src_metadata = src_path.metadata()?;
 		let prev_metadata = prev.metadata()?;
 
 		if src_metadata.len() == prev_metadata.len() {
@@ -82,12 +97,16 @@ pub fn copy_file_with_streaming(
 				let src_hash_hex = format_md5_hash(src_hash);
 
 				if hardlinked {
+					// Track hardlinked file (space saved)
+					context.stats.add_file_hardlinked(file_size);
 					println!(
 						"  Hardlinked: {} (MD5: {})",
 						dst_path.display(),
 						src_hash_hex
 					);
 				} else {
+					// Track copied file (new data written)
+					context.stats.add_file_copied(file_size);
 					println!(
 						"  Copied: {} (MD5 changed: {} -> {})",
 						dst_path.display(),
@@ -116,6 +135,9 @@ pub fn copy_file_with_streaming(
 	// 4. We don't have the MD5 hash in the store
 	// In these cases, we need to perform a regular streaming copy
 	let (_, src_hash) = stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None)?;
+
+	// Track copied file (new data written)
+	context.stats.add_file_copied(file_size);
 
 	let src_hash_hex = format_md5_hash(src_hash);
 	println!(
