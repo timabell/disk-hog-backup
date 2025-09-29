@@ -93,8 +93,8 @@ impl Md5Store {
 impl Md5Store {
 	fn parse_md5_line(line: &str) -> Option<([u8; 16], PathBuf)> {
 		// Check if the line starts with a backslash (indicating special characters)
-		let line = if line.starts_with('\\') {
-			&line[1..] // Remove the leading backslash
+		let line = if let Some(stripped) = line.strip_prefix('\\') {
+			stripped // Remove the leading backslash
 		} else {
 			line
 		};
@@ -172,7 +172,7 @@ impl Md5Store {
 
 		let mut hasher = Md5Context::new();
 		hasher.consume(&md5_content);
-		let result = hasher.compute();
+		let result = hasher.finalize();
 
 		let hash_hex = result
 			.iter()
@@ -282,7 +282,7 @@ mod tests {
 		let md5_content = std::fs::read(&md5_file_path).unwrap();
 		let mut hasher = Md5Context::new();
 		hasher.consume(&md5_content);
-		let result = hasher.compute();
+		let result = hasher.finalize();
 
 		let expected_hash = result
 			.iter()

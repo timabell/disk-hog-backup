@@ -112,11 +112,8 @@ impl IgnorePattern {
 			for (i, component) in components.iter().enumerate() {
 				if self.matches_wildcard(component, dir_pattern) {
 					// If matching component isn't the last part, path is inside matching dir
-					if i < components.len() - 1 {
-						return true;
-					}
-					// If it's the last component, only match if it's a directory
-					else if path.is_dir() {
+					// Or if it's the last component and it's a directory
+					if i < components.len() - 1 || path.is_dir() {
 						return true;
 					}
 				}
@@ -141,11 +138,8 @@ impl IgnorePattern {
 				if component == dir_pattern {
 					// If this component matches and it's not the last component,
 					// then the path is inside a directory that matches the pattern
-					if i < components.len() - 1 {
-						return true;
-					}
-					// If it's the last component, it matches only if it's a directory
-					else if path.is_dir() {
+					// Or if it's the last component and it's a directory
+					if i < components.len() - 1 || path.is_dir() {
 						return true;
 					}
 				}

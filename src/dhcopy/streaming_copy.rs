@@ -59,56 +59,53 @@ pub fn copy_file_with_streaming(
 	context: &mut BackupContext,
 ) -> io::Result<bool> {
 	// Check if we have a previous backup to compare with
-	if let Some(prev) = prev_path {
-		if prev.exists() && !prev.is_dir() {
-			// First check if file sizes match
-			let src_metadata = src_path.metadata()?;
-			let prev_metadata = prev.metadata()?;
+	if let Some(prev) = prev_path
+		&& prev.exists()
+		&& !prev.is_dir()
+	{
+		// First check if file sizes match
+		let src_metadata = src_path.metadata()?;
+		let prev_metadata = prev.metadata()?;
 
-			if src_metadata.len() == prev_metadata.len() {
-				// Check if we have the MD5 hash in the store
-				if let Some(md5_store) = &context.md5_store {
-					if let Some(prev_hash) = md5_store.get_hash(rel_path) {
-						// We have a pre-calculated hash, use it for comparison
-						let prev_hash_hex = format_md5_hash(*prev_hash);
+		if src_metadata.len() == prev_metadata.len() {
+			// Check if we have the MD5 hash in the store
+			if let Some(md5_store) = &context.md5_store
+				&& let Some(prev_hash) = md5_store.get_hash(rel_path)
+			{
+				// We have a pre-calculated hash, use it for comparison
+				let prev_hash_hex = format_md5_hash(*prev_hash);
 
-						// Stream the file with unified pipeline
-						let (hardlinked, src_hash) = stream_with_unified_pipeline(
-							src_path,
-							dst_path,
-							prev,
-							Some(*prev_hash),
-						)?;
+				// Stream the file with unified pipeline
+				let (hardlinked, src_hash) =
+					stream_with_unified_pipeline(src_path, dst_path, prev, Some(*prev_hash))?;
 
-						let src_hash_hex = format_md5_hash(src_hash);
+				let src_hash_hex = format_md5_hash(src_hash);
 
-						if hardlinked {
-							println!(
-								"  Hardlinked: {} (MD5: {})",
-								dst_path.display(),
-								src_hash_hex
-							);
-						} else {
-							println!(
-								"  Copied: {} (MD5 changed: {} -> {})",
-								dst_path.display(),
-								prev_hash_hex,
-								src_hash_hex
-							);
-						}
-
-						context.new_md5_store.add_hash(rel_path, src_hash);
-
-						// If we didn't hardlink, we need to preserve the metadata
-						if !hardlinked {
-							copy_file_metadata(src_path, dst_path)?;
-						}
-
-						return Ok(hardlinked);
-					}
+				if hardlinked {
+					println!(
+						"  Hardlinked: {} (MD5: {})",
+						dst_path.display(),
+						src_hash_hex
+					);
+				} else {
+					println!(
+						"  Copied: {} (MD5 changed: {} -> {})",
+						dst_path.display(),
+						prev_hash_hex,
+						src_hash_hex
+					);
 				}
-				// If we don't have the hash in the store, fall through to regular copy
+
+				context.new_md5_store.add_hash(rel_path, src_hash);
+
+				// If we didn't hardlink, we need to preserve the metadata
+				if !hardlinked {
+					copy_file_metadata(src_path, dst_path)?;
+				}
+
+				return Ok(hardlinked);
 			}
+			// If we don't have the hash in the store, fall through to regular copy
 		}
 	}
 
@@ -243,29 +240,20 @@ fn stream_with_unified_pipeline(
 	};
 
 	// Wait for reader thread to complete
-	let reader_result = reader_handle.join().unwrap_or_else(|_| {
-		Err(io::Error::new(
-			io::ErrorKind::Other,
-			"Reader thread panicked",
-		))
-	})?;
+	let reader_result = reader_handle
+		.join()
+		.unwrap_or_else(|_| Err(io::Error::other("Reader thread panicked")))?;
 
 	// Wait for writer thread to finish
-	writer_handle.join().unwrap_or_else(|_| {
-		Err(io::Error::new(
-			io::ErrorKind::Other,
-			"Writer thread panicked",
-		))
-	})?;
+	writer_handle
+		.join()
+		.unwrap_or_else(|_| Err(io::Error::other("Writer thread panicked")))?;
 
 	// Check if files matched (if we were monitoring)
 	let files_match = if let Some(handle) = monitor_handle {
-		handle.join().unwrap_or_else(|_| {
-			Err(io::Error::new(
-				io::ErrorKind::Other,
-				"Monitor thread panicked",
-			))
-		})?
+		handle
+			.join()
+			.unwrap_or_else(|_| Err(io::Error::other("Monitor thread panicked")))?
 	} else {
 		false
 	};
@@ -341,7 +329,7 @@ fn reader_thread(
 			// Check cancellation flag while waiting
 			if cancel_flag.load(Ordering::SeqCst) {
 				// Return the current MD5 hash
-				let digest = context.compute();
+				let digest = context.finalize();
 				return Ok(digest.0);
 			}
 		}
@@ -360,7 +348,7 @@ fn reader_thread(
 	}
 
 	// Compute final MD5 and send it
-	let digest = context.compute();
+	let digest = context.finalize();
 	if md5_tx.send(digest.0).is_err() {
 		return Err(io::Error::new(
 			io::ErrorKind::BrokenPipe,
@@ -407,12 +395,12 @@ fn monitor_md5(
 	cancel_flag: Arc<AtomicBool>,
 	expected_md5: [u8; 16],
 ) -> io::Result<bool> {
-	if let Ok(computed_md5) = md5_rx.recv() {
-		if computed_md5 == expected_md5 {
-			// Files match, signal cancellation
-			cancel_flag.store(true, Ordering::SeqCst);
-			return Ok(true);
-		}
+	if let Ok(computed_md5) = md5_rx.recv()
+		&& computed_md5 == expected_md5
+	{
+		// Files match, signal cancellation
+		cancel_flag.store(true, Ordering::SeqCst);
+		return Ok(true);
 	}
 	Ok(false)
 }
