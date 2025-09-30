@@ -14,7 +14,12 @@ use crate::dhcopy::ignore_patterns::IgnoreManager;
 use std::os::windows::fs::{symlink_dir, symlink_file};
 
 /// Performs a backup of a folder with MD5-based hardlinking optimization
-pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io::Result<()> {
+pub fn backup_folder(
+	source: &str,
+	dest: &str,
+	prev_backup: Option<&str>,
+	session_id: &str,
+) -> io::Result<()> {
 	println!("backing up folder {} into {}", source, dest);
 
 	// Start timing the backup process
@@ -23,9 +28,9 @@ pub fn backup_folder(source: &str, dest: &str, prev_backup: Option<&str>) -> io:
 	// Create or initialize the backup context once at the top level
 	let dest_path = Path::new(dest);
 	let mut context = if let Some(prev) = prev_backup {
-		BackupContext::with_previous_backup(dest_path, Path::new(prev))?
+		BackupContext::with_previous_backup(dest_path, Path::new(prev), session_id)?
 	} else {
-		BackupContext::new(dest_path)
+		BackupContext::new(dest_path, session_id)
 	};
 
 	// Track ignored paths

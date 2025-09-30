@@ -31,18 +31,22 @@ pub struct BackupContext {
 }
 
 impl BackupContext {
-	pub fn new(backup_root: &Path) -> Self {
+	pub fn new(backup_root: &Path, session_id: &str) -> Self {
 		BackupContext {
 			md5_store: None,
 			new_md5_store: Md5Store::new(backup_root),
-			stats: BackupStats::new(backup_root),
+			stats: BackupStats::new(backup_root, session_id),
 		}
 	}
 
-	pub fn with_previous_backup(backup_root: &Path, prev_backup: &Path) -> io::Result<Self> {
+	pub fn with_previous_backup(
+		backup_root: &Path,
+		prev_backup: &Path,
+		session_id: &str,
+	) -> io::Result<Self> {
 		let md5_store = Md5Store::load_from_backup(prev_backup)?;
 		let new_md5_store = Md5Store::new(backup_root);
-		let stats = BackupStats::new(backup_root);
+		let stats = BackupStats::new(backup_root, session_id);
 
 		Ok(BackupContext {
 			md5_store: Some(md5_store),
@@ -71,9 +75,6 @@ pub fn copy_file_with_streaming(
 	let src_metadata = src_path.metadata()?;
 	let file_size = src_metadata.len();
 
-	// Track that we're processing this file
-	context.stats.add_file_processed(file_size);
-
 	// Check if we have a previous backup to compare with
 	if let Some(prev) = prev_path
 		&& prev.exists()
@@ -91,8 +92,13 @@ pub fn copy_file_with_streaming(
 				let prev_hash_hex = format_md5_hash(*prev_hash);
 
 				// Stream the file with unified pipeline
-				let (hardlinked, src_hash) =
-					stream_with_unified_pipeline(src_path, dst_path, prev, Some(*prev_hash))?;
+				let (hardlinked, src_hash) = stream_with_unified_pipeline(
+					src_path,
+					dst_path,
+					prev,
+					Some(*prev_hash),
+					&context.stats,
+				)?;
 
 				let src_hash_hex = format_md5_hash(src_hash);
 
@@ -134,7 +140,8 @@ pub fn copy_file_with_streaming(
 	// 3. File sizes don't match
 	// 4. We don't have the MD5 hash in the store
 	// In these cases, we need to perform a regular streaming copy
-	let (_, src_hash) = stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None)?;
+	let (_, src_hash) =
+		stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None, &context.stats)?;
 
 	// Track copied file (new data written)
 	context.stats.add_file_copied(file_size);
@@ -211,6 +218,7 @@ fn stream_with_unified_pipeline(
 	dst_path: &Path,
 	prev_path: &Path,
 	expected_md5: Option<[u8; 16]>,
+	stats: &BackupStats,
 ) -> io::Result<(bool, [u8; 16])> {
 	// Create bounded channels for data and MD5 result
 	let (data_tx, data_rx) = bounded(MAX_QUEUE_CHUNKS);
@@ -229,6 +237,10 @@ fn stream_with_unified_pipeline(
 	let dst_path_clone = dst_path.to_path_buf();
 	let dst_path_for_writer = dst_path_clone.clone();
 
+	// Clone stats for threads
+	let reader_stats = stats.clone();
+	let writer_stats = stats.clone();
+
 	// Start reader thread
 	let reader_handle = thread::spawn(move || {
 		reader_thread(
@@ -237,6 +249,7 @@ fn stream_with_unified_pipeline(
 			md5_tx,
 			cancel_flag_reader,
 			global_memory,
+			&reader_stats,
 		)
 	});
 
@@ -247,6 +260,7 @@ fn stream_with_unified_pipeline(
 			data_rx,
 			cancel_flag_writer,
 			global_memory,
+			&writer_stats,
 		)
 	});
 
@@ -321,6 +335,7 @@ fn reader_thread(
 	md5_tx: Sender<[u8; 16]>,
 	cancel_flag: Arc<AtomicBool>,
 	global_memory: &AtomicUsize,
+	stats: &BackupStats,
 ) -> io::Result<[u8; 16]> {
 	let mut file = File::open(src_path)?;
 	let mut context = Context::new();
@@ -337,6 +352,10 @@ fn reader_thread(
 		if bytes_read == 0 {
 			break; // EOF
 		}
+
+		// Track source bytes read
+		stats.add_source_read(bytes_read as u64);
+		stats.add_hashed(bytes_read as u64);
 
 		// Create a chunk to send
 		let chunk = buffer[..bytes_read].to_vec();
@@ -387,6 +406,7 @@ fn writer_thread(
 	data_rx: Receiver<Vec<u8>>,
 	cancel_flag: Arc<AtomicBool>,
 	global_memory: &AtomicUsize,
+	stats: &BackupStats,
 ) -> io::Result<()> {
 	let mut file = File::create(dst_path)?;
 
@@ -403,6 +423,9 @@ fn writer_thread(
 
 		// Write chunk to file
 		file.write_all(&chunk)?;
+
+		// Track target bytes written
+		stats.add_target_written(chunk.len() as u64);
 
 		// Update global memory usage
 		global_memory.fetch_sub(chunk.len(), Ordering::SeqCst);

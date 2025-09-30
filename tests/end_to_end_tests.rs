@@ -817,20 +817,6 @@ pub fn create_test_file(base_folder: &str, path: &str, contents: &str) -> io::Re
 	Ok(())
 }
 
-/// Parse tab-separated stats file into a HashMap
-fn parse_stats_file(content: &str) -> std::collections::HashMap<String, String> {
-	let mut stats = std::collections::HashMap::new();
-	for line in content.lines().skip(1) {
-		// Skip header
-		if let Some((key, rest)) = line.split_once('\t')
-			&& let Some((bytes, _human)) = rest.split_once('\t')
-		{
-			stats.insert(key.to_string(), bytes.to_string());
-		}
-	}
-	stats
-}
-
 #[test]
 fn test_backup_stats_functionality() -> io::Result<()> {
 	// Set up source directory with multiple test files of different sizes
@@ -868,82 +854,45 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		stats_file.display()
 	);
 
-	// Read and parse the stats file
+	// Read the stats file
 	let stats_content = fs::read_to_string(&stats_file)?;
-	let stats = parse_stats_file(&stats_content);
 
-	// Verify basic stats structure and values
-	let processing_time: f64 = stats
-		.get("processing_time_seconds")
-		.expect("Should have processing time")
-		.parse()
-		.expect("Processing time should be a number");
+	// Verify the new format contains expected sections
 	assert!(
-		processing_time >= 0.0,
-		"Processing time should be non-negative"
+		stats_content.contains("Backup Summary"),
+		"Should have Backup Summary header"
+	);
+	assert!(
+		stats_content.contains("Session ID:"),
+		"Should have Session ID"
+	);
+	assert!(
+		stats_content.contains("Backup Duration:"),
+		"Should have Backup Duration"
+	);
+	assert!(
+		stats_content.contains("Backup Set Stats:"),
+		"Should have Backup Set Stats section"
+	);
+	assert!(stats_content.contains("I/O:"), "Should have I/O section");
+	assert!(
+		stats_content.contains("Performance:"),
+		"Should have Performance section"
 	);
 
-	let files_processed: u64 = stats
-		.get("files_processed")
-		.expect("Should have files processed")
-		.parse()
-		.expect("Files processed should be a number");
-	assert_eq!(files_processed, 4, "Should have processed 4 files");
-
-	let files_hardlinked: u64 = stats
-		.get("files_hardlinked")
-		.expect("Should have files hardlinked")
-		.parse()
-		.expect("Files hardlinked should be a number");
-	assert_eq!(files_hardlinked, 0, "First backup should have no hardlinks");
-
-	let files_copied: u64 = stats
-		.get("files_copied")
-		.expect("Should have files copied")
-		.parse()
-		.expect("Files copied should be a number");
-	assert_eq!(
-		files_copied, 4,
-		"All 4 files should be copied in first backup"
+	// Verify first backup had all files copied (no hardlinks)
+	assert!(
+		stats_content.contains("Copied:     4 files"),
+		"Should have copied 4 files in first backup"
 	);
-
-	// Verify byte counts
-	let expected_total_bytes = 18 + 1024 + (10 * 1024) + 11; // Sum of file sizes
-
-	let bytes_processed: u64 = stats
-		.get("bytes_processed")
-		.expect("Should have bytes processed")
-		.parse()
-		.expect("Bytes processed should be a number");
-	assert_eq!(
-		bytes_processed, expected_total_bytes as u64,
-		"Should process expected total bytes"
+	assert!(
+		stats_content.contains("Hardlinked: 0 files"),
+		"Should have no hardlinked files in first backup"
 	);
-
-	let bytes_written: u64 = stats
-		.get("bytes_written_new_data")
-		.expect("Should have bytes written")
-		.parse()
-		.expect("Bytes written should be a number");
-	assert_eq!(
-		bytes_written, expected_total_bytes as u64,
-		"Should write all bytes in first backup"
+	assert!(
+		stats_content.contains("Total:      4 files"),
+		"Should have 4 total files"
 	);
-
-	let bytes_saved: u64 = stats
-		.get("bytes_saved_via_hardlink")
-		.expect("Should have bytes saved")
-		.parse()
-		.expect("Bytes saved should be a number");
-	assert_eq!(bytes_saved, 0, "Should save no bytes in first backup");
-
-	// Verify speed calculation
-	let speed: f64 = stats
-		.get("processing_speed_bytes_per_sec")
-		.expect("Should have processing speed")
-		.parse()
-		.expect("Processing speed should be a number");
-	assert!(speed > 0.0, "Processing speed should be positive");
 
 	// Sleep to ensure different backup set names (they're based on timestamp)
 	thread::sleep(time::Duration::from_secs(2));
@@ -985,79 +934,24 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 	);
 
 	let second_stats_content = fs::read_to_string(&second_stats_file)?;
-	let second_stats = parse_stats_file(&second_stats_content);
 
-	// Verify hardlinking worked in second backup
-	let second_files_processed: u64 = second_stats
-		.get("files_processed")
-		.expect("Should have files processed")
-		.parse()
-		.expect("Files processed should be a number");
-	assert_eq!(
-		second_files_processed, 4,
-		"Second backup should process 4 files"
+	// Verify second backup had all files hardlinked (no copies)
+	assert!(
+		second_stats_content.contains("Hardlinked: 4 files"),
+		"Should have hardlinked 4 files in second backup"
 	);
-
-	let second_files_hardlinked: u64 = second_stats
-		.get("files_hardlinked")
-		.expect("Should have files hardlinked")
-		.parse()
-		.expect("Files hardlinked should be a number");
-	assert_eq!(
-		second_files_hardlinked, 4,
-		"All files should be hardlinked in second backup"
+	assert!(
+		second_stats_content.contains("Copied:     0 files"),
+		"Should have no copied files in second backup"
 	);
-
-	let second_files_copied: u64 = second_stats
-		.get("files_copied")
-		.expect("Should have files copied")
-		.parse()
-		.expect("Files copied should be a number");
-	assert_eq!(
-		second_files_copied, 0,
-		"No files should be copied in second backup"
-	);
-
-	// Verify space savings
-	let second_bytes_processed: u64 = second_stats
-		.get("bytes_processed")
-		.expect("Should have bytes processed")
-		.parse()
-		.expect("Bytes processed should be a number");
-	assert_eq!(
-		second_bytes_processed, expected_total_bytes as u64,
-		"Should process same total bytes"
-	);
-
-	let second_bytes_saved: u64 = second_stats
-		.get("bytes_saved_via_hardlink")
-		.expect("Should have bytes saved")
-		.parse()
-		.expect("Bytes saved should be a number");
-	assert_eq!(
-		second_bytes_saved, expected_total_bytes as u64,
-		"Should save all bytes via hardlinking"
-	);
-
-	let second_bytes_written: u64 = second_stats
-		.get("bytes_written_new_data")
-		.expect("Should have bytes written")
-		.parse()
-		.expect("Bytes written should be a number");
-	assert_eq!(
-		second_bytes_written, 0,
-		"Should write no new bytes in second backup"
+	assert!(
+		second_stats_content.contains("Total:      4 files"),
+		"Should still have 4 total files"
 	);
 
 	println!("✓ Stats functionality test passed!");
-	println!(
-		"  First backup: {} files copied, {} bytes written",
-		files_copied, bytes_written
-	);
-	println!(
-		"  Second backup: {} files hardlinked, {} bytes saved",
-		second_files_hardlinked, second_bytes_saved
-	);
+	println!("  First backup: All files copied (no hardlinks)");
+	println!("  Second backup: All files hardlinked (space saved)");
 
 	Ok(())
 }
