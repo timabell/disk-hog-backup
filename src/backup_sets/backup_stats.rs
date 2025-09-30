@@ -16,53 +16,78 @@ pub struct BackupStats {
 
 struct BackupStatsInner {
 	start_time: Instant,
-	files_processed: AtomicUsize,
 	files_hardlinked: AtomicUsize,
 	files_copied: AtomicUsize,
-	bytes_processed: AtomicU64,
-	bytes_saved: AtomicU64,
-	bytes_written: AtomicU64,
+	bytes_hardlinked: AtomicU64,
+	bytes_copied: AtomicU64,
+	bytes_source_read: AtomicU64,
+	bytes_target_read: AtomicU64,
+	bytes_target_written: AtomicU64,
+	bytes_hashed: AtomicU64,
 	backup_root: PathBuf,
+	session_id: String,
 }
 
 impl BackupStats {
 	/// Create a new BackupStats instance for tracking backup statistics
-	pub fn new(backup_root: &Path) -> Self {
+	pub fn new(backup_root: &Path, session_id: &str) -> Self {
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
 				start_time: Instant::now(),
-				files_processed: AtomicUsize::new(0),
 				files_hardlinked: AtomicUsize::new(0),
 				files_copied: AtomicUsize::new(0),
-				bytes_processed: AtomicU64::new(0),
-				bytes_saved: AtomicU64::new(0),
-				bytes_written: AtomicU64::new(0),
+				bytes_hardlinked: AtomicU64::new(0),
+				bytes_copied: AtomicU64::new(0),
+				bytes_source_read: AtomicU64::new(0),
+				bytes_target_read: AtomicU64::new(0),
+				bytes_target_written: AtomicU64::new(0),
+				bytes_hashed: AtomicU64::new(0),
 				backup_root: backup_root.to_path_buf(),
+				session_id: session_id.to_string(),
 			}),
 		}
 	}
 
-	/// Record a file that was processed
-	pub fn add_file_processed(&self, file_size: u64) {
-		self.inner.files_processed.fetch_add(1, Ordering::Relaxed);
+	/// Track bytes read from source file
+	pub fn add_source_read(&self, bytes: u64) {
 		self.inner
-			.bytes_processed
-			.fetch_add(file_size, Ordering::Relaxed);
+			.bytes_source_read
+			.fetch_add(bytes, Ordering::Relaxed);
 	}
 
-	/// Record a file that was hardlinked (space saved)
+	/// Track bytes read from target (for verification during hardlinking)
+	#[allow(dead_code)]
+	pub fn add_target_read(&self, bytes: u64) {
+		self.inner
+			.bytes_target_read
+			.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track bytes written to target
+	pub fn add_target_written(&self, bytes: u64) {
+		self.inner
+			.bytes_target_written
+			.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track bytes that were hashed
+	pub fn add_hashed(&self, bytes: u64) {
+		self.inner.bytes_hashed.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Record that a file was hardlinked (no new data written)
 	pub fn add_file_hardlinked(&self, file_size: u64) {
 		self.inner.files_hardlinked.fetch_add(1, Ordering::Relaxed);
 		self.inner
-			.bytes_saved
+			.bytes_hardlinked
 			.fetch_add(file_size, Ordering::Relaxed);
 	}
 
-	/// Record a file that was copied (new data written)
+	/// Record that a file was copied (new data written)
 	pub fn add_file_copied(&self, file_size: u64) {
 		self.inner.files_copied.fetch_add(1, Ordering::Relaxed);
 		self.inner
-			.bytes_written
+			.bytes_copied
 			.fetch_add(file_size, Ordering::Relaxed);
 	}
 
@@ -71,86 +96,124 @@ impl BackupStats {
 		self.inner.start_time.elapsed()
 	}
 
-	/// Save the statistics to a tab-separated text file in the backup root directory
+	/// Format duration as HH:MM:SS.mmm
+	fn format_duration(duration: Duration) -> String {
+		let total_millis = duration.as_millis();
+		let hours = total_millis / 3_600_000;
+		let minutes = (total_millis % 3_600_000) / 60_000;
+		let seconds = (total_millis % 60_000) / 1_000;
+		let millis = total_millis % 1_000;
+		format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+	}
+
+	/// Format speed in MB/s with one decimal place
+	fn format_speed_mbps(bytes: u64, seconds: f64) -> String {
+		if seconds > 0.0 {
+			let mb_per_sec = (bytes as f64) / (1024.0 * 1024.0) / seconds;
+			format!("{:.1} MB/s", mb_per_sec)
+		} else {
+			"N/A".to_string()
+		}
+	}
+
+	/// Save the statistics to a formatted text file in the backup root directory
 	pub fn save(&self) -> io::Result<()> {
 		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
 		let mut file = File::create(&stats_path)?;
 
 		let elapsed = self.elapsed();
-		let processing_time_secs = elapsed.as_secs_f64();
+		let elapsed_secs = elapsed.as_secs_f64();
 
-		let files_processed = self.inner.files_processed.load(Ordering::Relaxed);
+		// Load all values
 		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
 		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
-		let bytes_processed = self.inner.bytes_processed.load(Ordering::Relaxed);
-		let bytes_saved = self.inner.bytes_saved.load(Ordering::Relaxed);
-		let bytes_written = self.inner.bytes_written.load(Ordering::Relaxed);
+		let files_total = files_hardlinked + files_copied;
 
-		let processing_speed_bps = if processing_time_secs > 0.0 {
-			bytes_processed as f64 / processing_time_secs
-		} else {
-			0.0
-		};
+		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
+		let bytes_total = bytes_hardlinked + bytes_copied;
 
-		// Write header
-		writeln!(file, "stat_name\tbytes\thuman_readable")?;
+		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
+		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
+		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
+		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
 
-		// Write timing stats
+		// Write the formatted stats file
+		writeln!(file, "Backup Summary")?;
+		writeln!(file, "==============")?;
+		writeln!(file, "Time format: HH:MM:SS.mmm")?;
+		writeln!(file, "Sizes: bytes (with human-readable shown)")?;
+		writeln!(file, "Speed: MB/s")?;
+		writeln!(file)?;
+		writeln!(file, "Session ID: {}", self.inner.session_id)?;
+		writeln!(file)?;
+		writeln!(file, "Time:")?;
 		writeln!(
 			file,
-			"processing_time_seconds\t{:.1}\t{:.1} seconds",
-			processing_time_secs, processing_time_secs
+			"  Backup Duration: {}",
+			Self::format_duration(elapsed)
+		)?;
+		writeln!(file)?;
+		writeln!(file, "Backup Set Stats:")?;
+		writeln!(
+			file,
+			"  Hardlinked: {} files, {}",
+			files_hardlinked,
+			ByteSize(bytes_hardlinked)
 		)?;
 		writeln!(
 			file,
-			"processing_time_minutes\t{:.2}\t{:.2} minutes",
-			processing_time_secs / 60.0,
-			processing_time_secs / 60.0
-		)?;
-
-		// Write file counts
-		writeln!(
-			file,
-			"files_processed\t{}\t{} files",
-			files_processed, files_processed
+			"  Copied:     {} files, {}",
+			files_copied,
+			ByteSize(bytes_copied)
 		)?;
 		writeln!(
 			file,
-			"files_hardlinked\t{}\t{} files",
-			files_hardlinked, files_hardlinked
+			"  Total:      {} files, {}",
+			files_total,
+			ByteSize(bytes_total)
+		)?;
+		writeln!(file)?;
+		writeln!(file, "I/O:")?;
+		writeln!(
+			file,
+			"  Source Read: {} ({})",
+			bytes_source_read,
+			ByteSize(bytes_source_read)
 		)?;
 		writeln!(
 			file,
-			"files_copied\t{}\t{} files",
-			files_copied, files_copied
-		)?;
-
-		// Write byte stats with human-readable sizes
-		writeln!(
-			file,
-			"bytes_processed\t{}\t{}",
-			bytes_processed,
-			ByteSize(bytes_processed)
+			"  Target Read: {} ({})",
+			bytes_target_read,
+			ByteSize(bytes_target_read)
 		)?;
 		writeln!(
 			file,
-			"bytes_saved_via_hardlink\t{}\t{}",
-			bytes_saved,
-			ByteSize(bytes_saved)
+			"  Target Written: {} ({})",
+			bytes_target_written,
+			ByteSize(bytes_target_written)
+		)?;
+		writeln!(file)?;
+		writeln!(file, "Performance:")?;
+		writeln!(
+			file,
+			"  Source Read: {}",
+			Self::format_speed_mbps(bytes_source_read, elapsed_secs)
 		)?;
 		writeln!(
 			file,
-			"bytes_written_new_data\t{}\t{}",
-			bytes_written,
-			ByteSize(bytes_written)
+			"  Target Read: {}",
+			Self::format_speed_mbps(bytes_target_read, elapsed_secs)
 		)?;
-
-		// Write speed
 		writeln!(
 			file,
-			"processing_speed_bytes_per_sec\t{:.0}\t{}/s",
-			processing_speed_bps,
-			ByteSize(processing_speed_bps as u64)
+			"  Target Write: {}",
+			Self::format_speed_mbps(bytes_target_written, elapsed_secs)
+		)?;
+		writeln!(
+			file,
+			"  Hashing: {}",
+			Self::format_speed_mbps(bytes_hashed, elapsed_secs)
 		)?;
 
 		println!("\nBackup Statistics saved to: {}", stats_path.display());
@@ -159,42 +222,87 @@ impl BackupStats {
 		Ok(())
 	}
 
-	/// Print a summary of the statistics
+	/// Print a summary of the statistics to console
 	pub fn print_summary(&self) {
 		let elapsed = self.elapsed();
-		let processing_time_secs = elapsed.as_secs_f64();
+		let elapsed_secs = elapsed.as_secs_f64();
 
-		let files_processed = self.inner.files_processed.load(Ordering::Relaxed);
+		// Load all values
 		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
 		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
-		let bytes_processed = self.inner.bytes_processed.load(Ordering::Relaxed);
-		let bytes_saved = self.inner.bytes_saved.load(Ordering::Relaxed);
-		let bytes_written = self.inner.bytes_written.load(Ordering::Relaxed);
+		let files_total = files_hardlinked + files_copied;
 
-		let processing_speed_bps = if processing_time_secs > 0.0 {
-			bytes_processed as f64 / processing_time_secs
-		} else {
-			0.0
-		};
+		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
+		let bytes_total = bytes_hardlinked + bytes_copied;
 
-		println!("\n==== Backup Statistics Summary ====");
-		println!(
-			"Processing Time: {:.1} seconds ({:.1} minutes)",
-			processing_time_secs,
-			processing_time_secs / 60.0
-		);
-		println!("Files Processed: {}", files_processed);
-		println!("  - Hardlinked: {} (space saved)", files_hardlinked);
-		println!("  - Copied: {} (new data)", files_copied);
+		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
+		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
+		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
+		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
+
+		println!("\nBackup Summary");
+		println!("==============");
+		println!("Time format: HH:MM:SS.mmm");
+		println!("Sizes: bytes (with human-readable shown)");
+		println!("Speed: MB/s");
 		println!();
-		println!("Data Processed: {}", ByteSize(bytes_processed));
-		println!("Space Saved: {} (via hardlinking)", ByteSize(bytes_saved));
-		println!("New Data Written: {}", ByteSize(bytes_written));
+		println!("Session ID: {}", self.inner.session_id);
+		println!();
+		println!("Time:");
+		println!("  Backup Duration: {}", Self::format_duration(elapsed));
+		println!();
+		println!("Backup Set Stats:");
 		println!(
-			"Processing Speed: {}/s",
-			ByteSize(processing_speed_bps as u64)
+			"  Hardlinked: {} files, {}",
+			files_hardlinked,
+			ByteSize(bytes_hardlinked)
 		);
-		println!("===================================");
+		println!(
+			"  Copied:     {} files, {}",
+			files_copied,
+			ByteSize(bytes_copied)
+		);
+		println!(
+			"  Total:      {} files, {}",
+			files_total,
+			ByteSize(bytes_total)
+		);
+		println!();
+		println!("I/O:");
+		println!(
+			"  Source Read: {} ({})",
+			bytes_source_read,
+			ByteSize(bytes_source_read)
+		);
+		println!(
+			"  Target Read: {} ({})",
+			bytes_target_read,
+			ByteSize(bytes_target_read)
+		);
+		println!(
+			"  Target Written: {} ({})",
+			bytes_target_written,
+			ByteSize(bytes_target_written)
+		);
+		println!();
+		println!("Performance:");
+		println!(
+			"  Source Read: {}",
+			Self::format_speed_mbps(bytes_source_read, elapsed_secs)
+		);
+		println!(
+			"  Target Read: {}",
+			Self::format_speed_mbps(bytes_target_read, elapsed_secs)
+		);
+		println!(
+			"  Target Write: {}",
+			Self::format_speed_mbps(bytes_target_written, elapsed_secs)
+		);
+		println!(
+			"  Hashing: {}",
+			Self::format_speed_mbps(bytes_hashed, elapsed_secs)
+		);
 	}
 }
 
@@ -202,59 +310,74 @@ impl BackupStats {
 mod tests {
 	use super::*;
 	use std::thread;
-	use std::time::Duration;
 	use tempfile::tempdir;
 
 	#[test]
 	fn test_backup_stats_creation() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path());
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
 
-		assert_eq!(stats.inner.files_processed.load(Ordering::Relaxed), 0);
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 0);
 		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 0);
-		assert_eq!(stats.inner.bytes_processed.load(Ordering::Relaxed), 0);
-		assert_eq!(stats.inner.bytes_saved.load(Ordering::Relaxed), 0);
-		assert_eq!(stats.inner.bytes_written.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_hardlinked.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_copied.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_source_read.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_target_read.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_target_written.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_hashed.load(Ordering::Relaxed), 0);
 	}
 
 	#[test]
 	fn test_adding_file_statistics() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path());
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
 
-		// Add some file operations
-		stats.add_file_processed(1024 * 1024); // 1 MB
+		// Add some I/O operations
+		stats.add_source_read(1024 * 1024); // Read 1 MB from source
+		stats.add_hashed(1024 * 1024); // Hash 1 MB
 		stats.add_file_hardlinked(1024 * 1024); // 1 MB hardlinked
 
-		stats.add_file_processed(2 * 1024 * 1024); // 2 MB
+		stats.add_source_read(2 * 1024 * 1024); // Read 2 MB from source
+		stats.add_hashed(2 * 1024 * 1024); // Hash 2 MB
+		stats.add_target_written(2 * 1024 * 1024); // Write 2 MB to target
 		stats.add_file_copied(2 * 1024 * 1024); // 2 MB copied
 
-		assert_eq!(stats.inner.files_processed.load(Ordering::Relaxed), 2);
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 1);
 		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 1);
 		assert_eq!(
-			stats.inner.bytes_processed.load(Ordering::Relaxed),
+			stats.inner.bytes_source_read.load(Ordering::Relaxed),
 			3 * 1024 * 1024
 		);
-		assert_eq!(stats.inner.bytes_saved.load(Ordering::Relaxed), 1024 * 1024);
 		assert_eq!(
-			stats.inner.bytes_written.load(Ordering::Relaxed),
+			stats.inner.bytes_hardlinked.load(Ordering::Relaxed),
+			1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_copied.load(Ordering::Relaxed),
 			2 * 1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_target_written.load(Ordering::Relaxed),
+			2 * 1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_hashed.load(Ordering::Relaxed),
+			3 * 1024 * 1024
 		);
 	}
 
 	#[test]
 	fn test_thread_safety() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path());
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
 
 		let threads: Vec<_> = (0..10)
 			.map(|_| {
 				let stats_clone = stats.clone();
 				thread::spawn(move || {
 					for _ in 0..100 {
-						stats_clone.add_file_processed(1024);
+						stats_clone.add_source_read(1024);
+						stats_clone.add_hashed(1024);
 						stats_clone.add_file_hardlinked(512);
 						stats_clone.add_file_copied(512);
 					}
@@ -266,76 +389,83 @@ mod tests {
 			t.join().unwrap();
 		}
 
-		assert_eq!(stats.inner.files_processed.load(Ordering::Relaxed), 1000);
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 1000);
 		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 1000);
+		assert_eq!(
+			stats.inner.bytes_source_read.load(Ordering::Relaxed),
+			1000 * 1024
+		);
 	}
 
 	#[test]
 	fn test_save_stats_format() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path());
+		let backup_path = temp_dir.path().join("backup");
+		std::fs::create_dir(&backup_path).unwrap();
+		let stats = BackupStats::new(&backup_path, "dhb-set-20250929-131320");
 
 		// Add some data
-		stats.add_file_processed(5 * 1024 * 1024 * 1024); // 5 GB
-		stats.add_file_hardlinked(3 * 1024 * 1024 * 1024); // 3 GB
-		stats.add_file_copied(2 * 1024 * 1024 * 1024); // 2 GB
+		stats.add_source_read(7 * 1024 * 1024 * 1024); // 7 GB read
+		stats.add_hashed(7 * 1024 * 1024 * 1024); // 7 GB hashed
+		stats.add_file_hardlinked(3 * 1024 * 1024 * 1024); // 3 GB hardlinked
+		stats.add_file_copied(2 * 1024 * 1024 * 1024); // 2 GB copied
+		stats.add_target_written(2 * 1024 * 1024 * 1024); // 2 GB written
+
+		// Sleep briefly to get non-zero timing
+		thread::sleep(Duration::from_millis(10));
 
 		// Save stats
 		stats.save().unwrap();
 
 		// Read and verify file contents
-		let stats_path = temp_dir.path().join(STATS_FILENAME);
+		let stats_path = backup_path.join(STATS_FILENAME);
 		let contents = std::fs::read_to_string(stats_path).unwrap();
 
-		// Verify header exists
-		assert!(contents.contains("stat_name\tbytes\thuman_readable"));
+		// Verify key sections exist
+		assert!(contents.contains("Backup Summary"));
+		assert!(contents.contains("Session ID: dhb-set-20250929-131320"));
+		assert!(contents.contains("Backup Duration:"));
+		assert!(contents.contains("Backup Set Stats:"));
+		assert!(contents.contains("I/O:"));
+		assert!(contents.contains("Performance:"));
 
-		// Verify some specific entries exist
-		assert!(contents.contains("files_processed\t1\t1 files"));
-		assert!(contents.contains("files_hardlinked\t1\t1 files"));
-		assert!(contents.contains("files_copied\t1\t1 files"));
-		assert!(contents.contains("bytes_processed\t5368709120\t5.4 GB")); // ByteSize uses decimal units
-		assert!(contents.contains("bytes_saved_via_hardlink\t3221225472\t3.2 GB"));
-		assert!(contents.contains("bytes_written_new_data\t2147483648\t2.1 GB"));
+		// Verify data is present
+		assert!(contents.contains("Hardlinked: 1 files"));
+		assert!(contents.contains("Copied:     1 files"));
+		assert!(contents.contains("Total:      2 files"));
 	}
 
 	#[test]
-	fn test_timing_and_speed() {
-		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path());
-
-		// Add 100 MB of data
-		stats.add_file_processed(100 * 1024 * 1024);
-
-		// Sleep briefly to ensure elapsed time is non-zero
-		thread::sleep(Duration::from_millis(10));
-
-		let elapsed = stats.elapsed();
-		assert!(elapsed.as_secs_f64() > 0.0);
+	fn test_format_duration() {
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(0)),
+			"00:00:00.000"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(123)),
+			"00:00:00.123"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(65_123)),
+			"00:01:05.123"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(3_665_123)),
+			"01:01:05.123"
+		);
 	}
 
 	#[test]
-	fn test_bytesize_formatting() {
-		// Test that ByteSize gives us nice human-readable output
-		// Note: ByteSize uses decimal units by default (1000-based, not 1024-based)
-		println!("1024 bytes: {}", ByteSize(1024));
-		println!("1MB (1024*1024): {}", ByteSize(1024 * 1024));
-		println!("1GB (1024*1024*1024): {}", ByteSize(1024 * 1024 * 1024));
-		println!("2GB: {}", ByteSize(2 * 1024 * 1024 * 1024));
-		println!("5GB: {}", ByteSize(5 * 1024 * 1024 * 1024));
-
-		// Test actual values from our tests
-		assert_eq!(format!("{}", ByteSize(1024)), "1.0 KB");
-		// For binary units (1024-based), the formatting will be different from decimal
-		let one_mib = 1024 * 1024;
-		let one_gib = 1024 * 1024 * 1024;
-
-		// Just verify they format to something reasonable
-		let mb_str = format!("{}", ByteSize(one_mib));
-		assert!(mb_str.contains("MB") || mb_str.contains("KB"));
-
-		let gb_str = format!("{}", ByteSize(one_gib));
-		assert!(gb_str.contains("GB") || gb_str.contains("MB"));
+	fn test_format_speed_mbps() {
+		assert_eq!(
+			BackupStats::format_speed_mbps(1024 * 1024 * 100, 1.0),
+			"100.0 MB/s"
+		);
+		assert_eq!(
+			BackupStats::format_speed_mbps(1024 * 1024 * 50, 2.0),
+			"25.0 MB/s"
+		);
+		assert_eq!(BackupStats::format_speed_mbps(0, 1.0), "0.0 MB/s");
+		assert_eq!(BackupStats::format_speed_mbps(1024 * 1024, 0.0), "N/A");
 	}
 }
