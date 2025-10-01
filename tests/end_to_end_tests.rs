@@ -866,18 +866,19 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		stats_content.contains("Session ID:"),
 		"Should have Session ID"
 	);
-	assert!(
-		stats_content.contains("Backup Duration:"),
-		"Should have Backup Duration"
-	);
+	assert!(stats_content.contains("Time:"), "Should have Time section");
 	assert!(
 		stats_content.contains("Backup Set Stats:"),
 		"Should have Backup Set Stats section"
 	);
 	assert!(stats_content.contains("I/O:"), "Should have I/O section");
 	assert!(
-		stats_content.contains("Performance:"),
-		"Should have Performance section"
+		stats_content.contains("Started:"),
+		"Should have start timestamp"
+	);
+	assert!(
+		stats_content.contains("Finished:"),
+		"Should have end timestamp"
 	);
 
 	// Verify first backup had all files copied (no hardlinks)
