@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ pub struct BackupStats {
 
 struct BackupStatsInner {
 	start_time: Instant,
+	start_timestamp: DateTime<Utc>,
 	files_hardlinked: AtomicUsize,
 	files_copied: AtomicUsize,
 	bytes_hardlinked: AtomicU64,
@@ -34,6 +36,7 @@ impl BackupStats {
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
 				start_time: Instant::now(),
+				start_timestamp: Utc::now(),
 				files_hardlinked: AtomicUsize::new(0),
 				files_copied: AtomicUsize::new(0),
 				bytes_hardlinked: AtomicU64::new(0),
@@ -106,23 +109,13 @@ impl BackupStats {
 		format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
 	}
 
-	/// Format speed in MB/s with one decimal place
-	fn format_speed_mbps(bytes: u64, seconds: f64) -> String {
-		if seconds > 0.0 {
-			let mb_per_sec = (bytes as f64) / (1024.0 * 1024.0) / seconds;
-			format!("{:.1} MB/s", mb_per_sec)
-		} else {
-			"N/A".to_string()
-		}
-	}
-
 	/// Save the statistics to a formatted text file in the backup root directory
 	pub fn save(&self) -> io::Result<()> {
 		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
 		let mut file = File::create(&stats_path)?;
 
 		let elapsed = self.elapsed();
-		let elapsed_secs = elapsed.as_secs_f64();
+		let end_timestamp = Utc::now();
 
 		// Load all values
 		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
@@ -141,18 +134,30 @@ impl BackupStats {
 		// Write the formatted stats file
 		writeln!(file, "Backup Summary")?;
 		writeln!(file, "==============")?;
+		writeln!(
+			file,
+			"Program: disk-hog-backup {}",
+			env!("CARGO_PKG_VERSION")
+		)?;
 		writeln!(file, "Time format: HH:MM:SS.mmm")?;
 		writeln!(file, "Sizes: bytes (with human-readable shown)")?;
-		writeln!(file, "Speed: MB/s")?;
 		writeln!(file)?;
 		writeln!(file, "Session ID: {}", self.inner.session_id)?;
 		writeln!(file)?;
 		writeln!(file, "Time:")?;
 		writeln!(
 			file,
-			"  Backup Duration: {}",
-			Self::format_duration(elapsed)
+			"  Started:  {}",
+			self.inner
+				.start_timestamp
+				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
 		)?;
+		writeln!(
+			file,
+			"  Finished: {}",
+			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		)?;
+		writeln!(file, "  Duration: {}", Self::format_duration(elapsed))?;
 		writeln!(file)?;
 		writeln!(file, "Backup Set Stats:")?;
 		writeln!(
@@ -193,27 +198,11 @@ impl BackupStats {
 			bytes_target_written,
 			ByteSize(bytes_target_written)
 		)?;
-		writeln!(file)?;
-		writeln!(file, "Performance:")?;
 		writeln!(
 			file,
-			"  Source Read: {}",
-			Self::format_speed_mbps(bytes_source_read, elapsed_secs)
-		)?;
-		writeln!(
-			file,
-			"  Target Read: {}",
-			Self::format_speed_mbps(bytes_target_read, elapsed_secs)
-		)?;
-		writeln!(
-			file,
-			"  Target Write: {}",
-			Self::format_speed_mbps(bytes_target_written, elapsed_secs)
-		)?;
-		writeln!(
-			file,
-			"  Hashing: {}",
-			Self::format_speed_mbps(bytes_hashed, elapsed_secs)
+			"  Hashing: {} ({})",
+			bytes_hashed,
+			ByteSize(bytes_hashed)
 		)?;
 
 		println!("\nBackup Statistics saved to: {}", stats_path.display());
@@ -225,7 +214,7 @@ impl BackupStats {
 	/// Print a summary of the statistics to console
 	pub fn print_summary(&self) {
 		let elapsed = self.elapsed();
-		let elapsed_secs = elapsed.as_secs_f64();
+		let end_timestamp = Utc::now();
 
 		// Load all values
 		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
@@ -243,14 +232,24 @@ impl BackupStats {
 
 		println!("\nBackup Summary");
 		println!("==============");
+		println!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION"));
 		println!("Time format: HH:MM:SS.mmm");
 		println!("Sizes: bytes (with human-readable shown)");
-		println!("Speed: MB/s");
 		println!();
 		println!("Session ID: {}", self.inner.session_id);
 		println!();
 		println!("Time:");
-		println!("  Backup Duration: {}", Self::format_duration(elapsed));
+		println!(
+			"  Started:  {}",
+			self.inner
+				.start_timestamp
+				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		);
+		println!(
+			"  Finished: {}",
+			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		);
+		println!("  Duration: {}", Self::format_duration(elapsed));
 		println!();
 		println!("Backup Set Stats:");
 		println!(
@@ -285,24 +284,7 @@ impl BackupStats {
 			bytes_target_written,
 			ByteSize(bytes_target_written)
 		);
-		println!();
-		println!("Performance:");
-		println!(
-			"  Source Read: {}",
-			Self::format_speed_mbps(bytes_source_read, elapsed_secs)
-		);
-		println!(
-			"  Target Read: {}",
-			Self::format_speed_mbps(bytes_target_read, elapsed_secs)
-		);
-		println!(
-			"  Target Write: {}",
-			Self::format_speed_mbps(bytes_target_written, elapsed_secs)
-		);
-		println!(
-			"  Hashing: {}",
-			Self::format_speed_mbps(bytes_hashed, elapsed_secs)
-		);
+		println!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
 	}
 }
 
@@ -424,10 +406,9 @@ mod tests {
 		// Verify key sections exist
 		assert!(contents.contains("Backup Summary"));
 		assert!(contents.contains("Session ID: dhb-set-20250929-131320"));
-		assert!(contents.contains("Backup Duration:"));
+		assert!(contents.contains("Time:"));
 		assert!(contents.contains("Backup Set Stats:"));
 		assert!(contents.contains("I/O:"));
-		assert!(contents.contains("Performance:"));
 
 		// Verify data is present
 		assert!(contents.contains("Hardlinked: 1 files"));
@@ -453,19 +434,5 @@ mod tests {
 			BackupStats::format_duration(Duration::from_millis(3_665_123)),
 			"01:01:05.123"
 		);
-	}
-
-	#[test]
-	fn test_format_speed_mbps() {
-		assert_eq!(
-			BackupStats::format_speed_mbps(1024 * 1024 * 100, 1.0),
-			"100.0 MB/s"
-		);
-		assert_eq!(
-			BackupStats::format_speed_mbps(1024 * 1024 * 50, 2.0),
-			"25.0 MB/s"
-		);
-		assert_eq!(BackupStats::format_speed_mbps(0, 1.0), "0.0 MB/s");
-		assert_eq!(BackupStats::format_speed_mbps(1024 * 1024, 0.0), "N/A");
 	}
 }
