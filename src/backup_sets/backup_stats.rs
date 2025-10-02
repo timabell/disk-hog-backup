@@ -206,7 +206,6 @@ impl BackupStats {
 		)?;
 
 		println!("\nBackup Statistics saved to: {}", stats_path.display());
-		self.print_summary();
 
 		Ok(())
 	}

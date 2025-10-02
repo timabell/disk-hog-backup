@@ -53,9 +53,10 @@ pub fn backup_folder(
 		println!("Total ignored paths: {}", ignored_paths.len());
 	}
 
-	// Save the MD5 store and backup statistics (includes time and summary output)
+	// Save the MD5 store and backup statistics
 	context.save_md5_store()?;
 	context.save_stats()?;
+	context.print_stats_summary();
 
 	Ok(())
 }
