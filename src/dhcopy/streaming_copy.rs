@@ -99,7 +99,7 @@ pub fn copy_file_with_streaming(
 				let (hardlinked, src_hash) = stream_with_unified_pipeline(
 					src_path,
 					dst_path,
-					prev,
+					Some(prev),
 					Some(*prev_hash),
 					&context.stats,
 				)?;
@@ -145,7 +145,7 @@ pub fn copy_file_with_streaming(
 	// 4. We don't have the MD5 hash in the store
 	// In these cases, we need to perform a regular streaming copy
 	let (_, src_hash) =
-		stream_with_unified_pipeline(src_path, dst_path, Path::new(""), None, &context.stats)?;
+		stream_with_unified_pipeline(src_path, dst_path, None, None, &context.stats)?;
 
 	// Track copied file (new data written)
 	context.stats.add_file_copied(file_size);
@@ -220,7 +220,7 @@ fn format_md5_hash(hash: [u8; 16]) -> String {
 fn stream_with_unified_pipeline(
 	src_path: &Path,
 	dst_path: &Path,
-	prev_path: &Path,
+	prev_path: Option<&Path>,
 	expected_md5: Option<[u8; 16]>,
 	stats: &BackupStats,
 ) -> io::Result<(bool, [u8; 16])> {
@@ -300,30 +300,32 @@ fn stream_with_unified_pipeline(
 
 	// If files match, create a hardlink
 	if files_match {
-		// Create a hardlink from previous to destination
-		#[cfg(unix)]
-		{
-			// Check if destination file exists before trying to remove it
-			if dst_path.exists() {
-				// Remove the destination file that was created
-				fs::remove_file(dst_path)?;
+		if let Some(prev) = prev_path {
+			// Create a hardlink from previous to destination
+			#[cfg(unix)]
+			{
+				// Check if destination file exists before trying to remove it
+				if dst_path.exists() {
+					// Remove the destination file that was created
+					fs::remove_file(dst_path)?;
+				}
+				// Create a hardlink instead
+				fs::hard_link(prev, dst_path)?;
+				return Ok((true, reader_result));
 			}
-			// Create a hardlink instead
-			fs::hard_link(prev_path, dst_path)?;
-			return Ok((true, reader_result));
-		}
 
-		#[cfg(not(unix))]
-		{
-			// On non-Unix platforms, fall back to copying
-			// Check if destination file exists before trying to remove it
-			if dst_path.exists() {
-				// Remove the destination file that was created
-				fs::remove_file(dst_path)?;
+			#[cfg(not(unix))]
+			{
+				// On non-Unix platforms, fall back to copying
+				// Check if destination file exists before trying to remove it
+				if dst_path.exists() {
+					// Remove the destination file that was created
+					fs::remove_file(dst_path)?;
+				}
+				// Copy the file instead
+				fs::copy(prev, dst_path)?;
+				return Ok((true, reader_result));
 			}
-			// Copy the file instead
-			fs::copy(prev_path, dst_path)?;
-			return Ok((true, reader_result));
 		}
 	}
 
