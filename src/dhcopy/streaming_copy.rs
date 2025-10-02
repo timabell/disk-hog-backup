@@ -96,13 +96,13 @@ pub fn copy_file_with_streaming(
 				let prev_hash_hex = format_md5_hash(*prev_hash);
 
 				// Stream the file with unified pipeline
-				let (hardlinked, src_hash) = stream_with_unified_pipeline(
+				let (hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
 					src_path,
 					dst_path,
-					Some(prev),
-					Some(*prev_hash),
-					&context.stats,
-				)?;
+					prev_path: Some(prev),
+					expected_md5: Some(*prev_hash),
+					stats: &context.stats,
+				})?;
 
 				let src_hash_hex = format_md5_hash(src_hash);
 
@@ -144,8 +144,13 @@ pub fn copy_file_with_streaming(
 	// 3. File sizes don't match
 	// 4. We don't have the MD5 hash in the store
 	// In these cases, we need to perform a regular streaming copy
-	let (_, src_hash) =
-		stream_with_unified_pipeline(src_path, dst_path, None, None, &context.stats)?;
+	let (_, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
+		src_path,
+		dst_path,
+		prev_path: None,
+		expected_md5: None,
+		stats: &context.stats,
+	})?;
 
 	// Track copied file (new data written)
 	context.stats.add_file_copied(file_size);
@@ -215,15 +220,24 @@ fn format_md5_hash(hash: [u8; 16]) -> String {
 	})
 }
 
+struct StreamPipelineArgs<'a> {
+	src_path: &'a Path,
+	dst_path: &'a Path,
+	prev_path: Option<&'a Path>,
+	expected_md5: Option<[u8; 16]>,
+	stats: &'a BackupStats,
+}
+
 // Unified streaming pipeline that reads the file once, computes MD5, and potentially copies
 // Returns (hardlinked, src_hash)
-fn stream_with_unified_pipeline(
-	src_path: &Path,
-	dst_path: &Path,
-	prev_path: Option<&Path>,
-	expected_md5: Option<[u8; 16]>,
-	stats: &BackupStats,
-) -> io::Result<(bool, [u8; 16])> {
+fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [u8; 16])> {
+	let StreamPipelineArgs {
+		src_path,
+		dst_path,
+		prev_path,
+		expected_md5,
+		stats,
+	} = args;
 	// Create bounded channels for data and MD5 result
 	let (data_tx, data_rx) = bounded(MAX_QUEUE_CHUNKS);
 	let (md5_tx, md5_rx) = bounded(1);
@@ -299,33 +313,31 @@ fn stream_with_unified_pipeline(
 	};
 
 	// If files match, create a hardlink
-	if files_match {
-		if let Some(prev) = prev_path {
-			// Create a hardlink from previous to destination
-			#[cfg(unix)]
-			{
-				// Check if destination file exists before trying to remove it
-				if dst_path.exists() {
-					// Remove the destination file that was created
-					fs::remove_file(dst_path)?;
-				}
-				// Create a hardlink instead
-				fs::hard_link(prev, dst_path)?;
-				return Ok((true, reader_result));
+	if files_match && let Some(prev) = prev_path {
+		// Create a hardlink from previous to destination
+		#[cfg(unix)]
+		{
+			// Check if destination file exists before trying to remove it
+			if dst_path.exists() {
+				// Remove the destination file that was created
+				fs::remove_file(dst_path)?;
 			}
+			// Create a hardlink instead
+			fs::hard_link(prev, dst_path)?;
+			return Ok((true, reader_result));
+		}
 
-			#[cfg(not(unix))]
-			{
-				// On non-Unix platforms, fall back to copying
-				// Check if destination file exists before trying to remove it
-				if dst_path.exists() {
-					// Remove the destination file that was created
-					fs::remove_file(dst_path)?;
-				}
-				// Copy the file instead
-				fs::copy(prev, dst_path)?;
-				return Ok((true, reader_result));
+		#[cfg(not(unix))]
+		{
+			// On non-Unix platforms, fall back to copying
+			// Check if destination file exists before trying to remove it
+			if dst_path.exists() {
+				// Remove the destination file that was created
+				fs::remove_file(dst_path)?;
 			}
+			// Copy the file instead
+			fs::copy(prev, dst_path)?;
+			return Ok((true, reader_result));
 		}
 	}
 
