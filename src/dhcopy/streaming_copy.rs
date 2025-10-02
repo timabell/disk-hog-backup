@@ -68,6 +68,19 @@ impl BackupContext {
 	}
 }
 
+// Reference to the same file in the previous backup set
+struct PreviousFile<'a> {
+	path: &'a Path,
+	md5: [u8; 16],
+}
+
+struct StreamPipelineArgs<'a> {
+	src_path: &'a Path,
+	dst_path: &'a Path,
+	previous_file: Option<&'a PreviousFile<'a>>,
+	stats: &'a BackupStats,
+}
+
 pub fn copy_file_with_streaming(
 	src_path: &Path,
 	dst_path: &Path,
@@ -75,98 +88,81 @@ pub fn copy_file_with_streaming(
 	rel_path: &Path,
 	context: &mut BackupContext,
 ) -> io::Result<bool> {
-	// Get the source file size for statistics
 	let src_metadata = src_path.metadata()?;
 	let file_size = src_metadata.len();
 
-	// Check if we have a previous backup to compare with
-	if let Some(prev) = prev_path
-		&& prev.exists()
-		&& !prev.is_dir()
-	{
-		// First check if file sizes match
-		let prev_metadata = prev.metadata()?;
+	let previous_file = get_matching_previous_file(prev_path, &src_metadata, rel_path, context)?;
 
-		if src_metadata.len() == prev_metadata.len() {
-			// Check if we have the MD5 hash in the store
-			if let Some(prev_md5_store) = &context.prev_md5_store
-				&& let Some(prev_hash) = prev_md5_store.get_hash(rel_path)
-			{
-				// We have a pre-calculated hash, use it for comparison
-				let prev_hash_hex = format_md5_hash(*prev_hash);
-
-				// Stream the file with unified pipeline
-				let (hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
-					src_path,
-					dst_path,
-					prev_path: Some(prev),
-					expected_md5: Some(*prev_hash),
-					stats: &context.stats,
-				})?;
-
-				let src_hash_hex = format_md5_hash(src_hash);
-
-				if hardlinked {
-					// Track hardlinked file (space saved)
-					context.stats.add_file_hardlinked(file_size);
-					println!(
-						"  Hardlinked: {} (MD5: {})",
-						dst_path.display(),
-						src_hash_hex
-					);
-				} else {
-					// Track copied file (new data written)
-					context.stats.add_file_copied(file_size);
-					println!(
-						"  Copied: {} (MD5 changed: {} -> {})",
-						dst_path.display(),
-						prev_hash_hex,
-						src_hash_hex
-					);
-				}
-
-				context.new_md5_store.add_hash(rel_path, src_hash);
-
-				// If we didn't hardlink, we need to preserve the metadata
-				if !hardlinked {
-					copy_file_metadata(src_path, dst_path)?;
-				}
-
-				return Ok(hardlinked);
-			}
-			// If we don't have the hash in the store, fall through to regular copy
-		}
-	}
-
-	// If we get here, either:
-	// 1. There's no previous backup
-	// 2. The file doesn't exist in the previous backup
-	// 3. File sizes don't match
-	// 4. We don't have the MD5 hash in the store
-	// In these cases, we need to perform a regular streaming copy
-	let (_, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
+	let (hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
 		src_path,
 		dst_path,
-		prev_path: None,
-		expected_md5: None,
+		previous_file: previous_file.as_ref(),
 		stats: &context.stats,
 	})?;
 
-	// Track copied file (new data written)
-	context.stats.add_file_copied(file_size);
-
-	let src_hash_hex = format_md5_hash(src_hash);
-	println!(
-		"  Copied: {} (New, MD5: {})",
-		dst_path.display(),
-		src_hash_hex
-	);
-
-	// Preserve file metadata (timestamps, permissions)
-	copy_file_metadata(src_path, dst_path)?;
-
 	context.new_md5_store.add_hash(rel_path, src_hash);
-	Ok(false)
+
+	if hardlinked {
+		context.stats.add_file_hardlinked(file_size);
+	} else {
+		copy_file_metadata(src_path, dst_path)?;
+		context.stats.add_file_copied(file_size);
+	}
+
+	if hardlinked {
+		println!(
+			"  Hardlinked: {} (MD5: {})",
+			dst_path.display(),
+			format_md5_hash(src_hash)
+		);
+	} else if let Some(prev) = &previous_file {
+		println!(
+			"  Copied: {} (MD5 changed: {} -> {})",
+			dst_path.display(),
+			format_md5_hash(prev.md5),
+			format_md5_hash(src_hash)
+		);
+	} else {
+		println!(
+			"  Copied: {} (New, MD5: {})",
+			dst_path.display(),
+			format_md5_hash(src_hash)
+		);
+	}
+
+	Ok(hardlinked)
+}
+
+// get a path & hash for the same file in the previous backup if available and file hasn't changed in size
+fn get_matching_previous_file<'a>(
+	prev_path: Option<&'a Path>,
+	src_metadata: &std::fs::Metadata,
+	rel_path: &Path,
+	context: &BackupContext,
+) -> io::Result<Option<PreviousFile<'a>>> {
+	let Some(prev) = prev_path else {
+		return Ok(None);
+	};
+	if !prev.exists() || prev.is_dir() {
+		return Ok(None);
+	}
+
+	let prev_metadata = prev.metadata()?;
+	if src_metadata.len() != prev_metadata.len() {
+		return Ok(None);
+	}
+
+	let Some(prev_md5_store) = &context.prev_md5_store else {
+		return Ok(None);
+	};
+	let Some(prev_hash) = prev_md5_store.get_hash(rel_path) else {
+		return Ok(None);
+	};
+
+	Ok(Some(PreviousFile {
+		path: prev,
+		md5: *prev_hash,
+	}))
 }
 
 // Helper function to copy file metadata (timestamps, permissions)
@@ -220,24 +216,17 @@ fn format_md5_hash(hash: [u8; 16]) -> String {
 	})
 }
 
-struct StreamPipelineArgs<'a> {
-	src_path: &'a Path,
-	dst_path: &'a Path,
-	prev_path: Option<&'a Path>,
-	expected_md5: Option<[u8; 16]>,
-	stats: &'a BackupStats,
-}
-
 // Unified streaming pipeline that reads the file once, computes MD5, and potentially copies
 // Returns (hardlinked, src_hash)
 fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [u8; 16])> {
 	let StreamPipelineArgs {
 		src_path,
 		dst_path,
-		prev_path,
-		expected_md5,
+		previous_file,
 		stats,
 	} = args;
+	let prev_path = previous_file.map(|p| p.path);
+	let expected_md5 = previous_file.map(|p| p.md5);
 	// Create bounded channels for data and MD5 result
 	let (data_tx, data_rx) = bounded(MAX_QUEUE_CHUNKS);
 	let (md5_tx, md5_rx) = bounded(1);
