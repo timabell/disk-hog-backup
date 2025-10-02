@@ -269,7 +269,7 @@ fn stream_with_unified_pipeline(
 	});
 
 	// Start MD5 monitor thread if we have an expected hash
-	let monitor_handle = if let Some(expected) = expected_md5 {
+	let monitor_md5_handle = if let Some(expected) = expected_md5 {
 		let cancel_flag_monitor = Arc::clone(&cancel_flag);
 		Some(thread::spawn(move || {
 			monitor_md5(md5_rx, cancel_flag_monitor, expected)
@@ -290,7 +290,7 @@ fn stream_with_unified_pipeline(
 		.unwrap_or_else(|_| Err(io::Error::other("Writer thread panicked")))?;
 
 	// Check if files matched (if we were monitoring)
-	let files_match = if let Some(handle) = monitor_handle {
+	let files_match = if let Some(handle) = monitor_md5_handle {
 		handle
 			.join()
 			.unwrap_or_else(|_| Err(io::Error::other("Monitor thread panicked")))?
