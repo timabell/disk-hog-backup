@@ -62,6 +62,10 @@ impl BackupContext {
 	pub fn save_stats(&self) -> io::Result<()> {
 		self.stats.save()
 	}
+
+	pub fn print_stats_summary(&self) {
+		self.stats.print_summary()
+	}
 }
 
 pub fn copy_file_with_streaming(
