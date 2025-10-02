@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{self};
 use std::path::Path;
-use std::time::Instant;
 
 use crate::dhcopy::streaming_copy::{BackupContext, copy_file_with_streaming};
 
@@ -21,9 +20,6 @@ pub fn backup_folder(
 	session_id: &str,
 ) -> io::Result<()> {
 	println!("backing up folder {} into {}", source, dest);
-
-	// Start timing the backup process
-	let start_time = Instant::now();
 
 	// Create or initialize the backup context once at the top level
 	let dest_path = Path::new(dest);
@@ -46,12 +42,6 @@ pub fn backup_folder(
 		&mut ignored_paths,
 	)?;
 
-	// Save the MD5 store
-	context.save_md5_store()?;
-
-	// Save the backup statistics
-	context.save_stats()?;
-
 	// Output summary of ignored paths
 	if !ignored_paths.is_empty() {
 		println!("\nIgnored paths summary:");
@@ -63,24 +53,9 @@ pub fn backup_folder(
 		println!("Total ignored paths: {}", ignored_paths.len());
 	}
 
-	// Calculate and display the total time taken
-	let duration = start_time.elapsed();
-	let total_seconds = duration.as_secs();
-	let hours = total_seconds / 3600;
-	let minutes = (total_seconds % 3600) / 60;
-	let seconds = total_seconds % 60;
-
-	// Format the time as hours, minutes, seconds
-	if hours > 0 {
-		println!(
-			"Backup completed in {} hours {} mins {} seconds",
-			hours, minutes, seconds
-		);
-	} else if minutes > 0 {
-		println!("Backup completed in {} mins {} seconds", minutes, seconds);
-	} else {
-		println!("Backup completed in {} seconds", seconds);
-	}
+	// Save the MD5 store and backup statistics (includes time and summary output)
+	context.save_md5_store()?;
+	context.save_stats()?;
 
 	Ok(())
 }
