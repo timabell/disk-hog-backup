@@ -25,7 +25,7 @@ static GLOBAL_MEMORY_USAGE: AtomicUsize = AtomicUsize::new(0);
 
 // Struct to hold context for a backup operation
 pub struct BackupContext {
-	pub md5_store: Option<Md5Store>,
+	pub prev_md5_store: Option<Md5Store>,
 	pub new_md5_store: Md5Store,
 	pub stats: BackupStats,
 }
@@ -33,7 +33,7 @@ pub struct BackupContext {
 impl BackupContext {
 	pub fn new(backup_root: &Path, session_id: &str) -> Self {
 		BackupContext {
-			md5_store: None,
+			prev_md5_store: None,
 			new_md5_store: Md5Store::new(backup_root),
 			stats: BackupStats::new(backup_root, session_id),
 		}
@@ -44,12 +44,12 @@ impl BackupContext {
 		prev_backup: &Path,
 		session_id: &str,
 	) -> io::Result<Self> {
-		let md5_store = Md5Store::load_from_backup(prev_backup)?;
+		let prev_md5_store = Md5Store::load_from_backup(prev_backup)?;
 		let new_md5_store = Md5Store::new(backup_root);
 		let stats = BackupStats::new(backup_root, session_id);
 
 		Ok(BackupContext {
-			md5_store: Some(md5_store),
+			prev_md5_store: Some(prev_md5_store),
 			new_md5_store,
 			stats,
 		})
@@ -89,8 +89,8 @@ pub fn copy_file_with_streaming(
 
 		if src_metadata.len() == prev_metadata.len() {
 			// Check if we have the MD5 hash in the store
-			if let Some(md5_store) = &context.md5_store
-				&& let Some(prev_hash) = md5_store.get_hash(rel_path)
+			if let Some(prev_md5_store) = &context.prev_md5_store
+				&& let Some(prev_hash) = prev_md5_store.get_hash(rel_path)
 			{
 				// We have a pre-calculated hash, use it for comparison
 				let prev_hash_hex = format_md5_hash(*prev_hash);
