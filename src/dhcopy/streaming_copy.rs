@@ -335,8 +335,11 @@ fn reader_thread(
 	let mut buffer = vec![0; CHUNK_SIZE];
 
 	loop {
-		// Read a chunk
+		// 1. Time read I/O
+		let start = std::time::Instant::now();
 		let bytes_read = file.read(&mut buffer)?;
+		stats.add_reader_io_time(start.elapsed().as_nanos() as u64);
+
 		if bytes_read == 0 {
 			break; // EOF
 		}
@@ -347,28 +350,45 @@ fn reader_thread(
 		// Create a chunk wrapped in Arc to share between writer and hasher without cloning data
 		let chunk = Arc::new(buffer[..bytes_read].to_vec());
 
-		// Wait if global memory usage is too high
+		// 2. Time memory throttle (if any)
+		let throttle_start = std::time::Instant::now();
+		let mut throttled = false;
 		while global_memory.load(Ordering::SeqCst) + bytes_read > GLOBAL_MAX_BUFFER {
+			throttled = true;
 			thread::sleep(Duration::from_millis(10));
+		}
+		if throttled {
+			let throttle_time = throttle_start.elapsed().as_nanos() as u64;
+			stats.add_memory_throttle_time(throttle_time);
+			stats.inc_memory_throttle_count();
 		}
 
 		// Update global memory usage (counts once, will be decremented by writer)
 		global_memory.fetch_add(bytes_read, Ordering::SeqCst);
 
-		// Send Arc to both channels (Arc clone is cheap, data is shared)
+		// 3. Sample queue depths before send
+		stats.sample_writer_queue_depth(writer_tx.len() as u64);
+		stats.sample_hasher_queue_depth(hasher_tx.len() as u64);
+
+		// 4. Time send to writer channel
+		let start = std::time::Instant::now();
 		if writer_tx.send(Arc::clone(&chunk)).is_err() {
 			return Err(io::Error::new(
 				io::ErrorKind::BrokenPipe,
 				"Writer channel closed",
 			));
 		}
+		stats.add_reader_send_writer_time(start.elapsed().as_nanos() as u64);
 
+		// 5. Time send to hasher channel
+		let start = std::time::Instant::now();
 		if hasher_tx.send(chunk).is_err() {
 			return Err(io::Error::new(
 				io::ErrorKind::BrokenPipe,
 				"Hasher channel closed",
 			));
 		}
+		stats.add_reader_send_hasher_time(start.elapsed().as_nanos() as u64);
 	}
 
 	Ok(())
@@ -382,9 +402,22 @@ fn hasher_thread(
 ) -> io::Result<[u8; 16]> {
 	let mut context = Context::new();
 
+	// Track receive time by iterating manually
+	let mut recv_start = std::time::Instant::now();
+
 	for chunk in data_rx {
+		// 1. Time blocked on receive
+		stats.add_hasher_recv_time(recv_start.elapsed().as_nanos() as u64);
+
 		stats.add_hashed(chunk.len() as u64);
+
+		// 2. Time MD5 hashing
+		let start = std::time::Instant::now();
 		context.consume(&*chunk);
+		stats.add_hasher_hash_time(start.elapsed().as_nanos() as u64);
+
+		// Reset for next iteration
+		recv_start = std::time::Instant::now();
 	}
 
 	let digest = context.finalize();
@@ -406,7 +439,13 @@ fn writer_thread(
 ) -> io::Result<()> {
 	let mut file = File::create(dst_path)?;
 
+	// Track receive time by iterating manually
+	let mut recv_start = std::time::Instant::now();
+
 	for chunk in data_rx {
+		// 1. Time blocked on receive
+		stats.add_writer_recv_time(recv_start.elapsed().as_nanos() as u64);
+
 		// Check cancellation flag
 		if cancel_write.load(Ordering::SeqCst) {
 			// Clean up and exit
@@ -417,14 +456,19 @@ fn writer_thread(
 			return Ok(());
 		}
 
-		// Write chunk to file
+		// 2. Time write I/O
+		let start = std::time::Instant::now();
 		file.write_all(&chunk)?;
+		stats.add_writer_io_time(start.elapsed().as_nanos() as u64);
 
 		// Track target bytes written
 		stats.add_target_written(chunk.len() as u64);
 
 		// Update global memory usage
 		global_memory.fetch_sub(chunk.len(), Ordering::SeqCst);
+
+		// Reset for next iteration
+		recv_start = std::time::Instant::now();
 	}
 
 	Ok(())

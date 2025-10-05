@@ -28,6 +28,25 @@ struct BackupStatsInner {
 	bytes_hashed: AtomicU64,
 	backup_root: PathBuf,
 	session_id: String,
+
+	// Pipeline timing (nanoseconds) - cumulative across all files
+	reader_io_nanos: AtomicU64,
+	reader_send_writer_nanos: AtomicU64,
+	reader_send_hasher_nanos: AtomicU64,
+	hasher_recv_nanos: AtomicU64,
+	hasher_hash_nanos: AtomicU64,
+	writer_recv_nanos: AtomicU64,
+	writer_io_nanos: AtomicU64,
+	memory_throttle_nanos: AtomicU64,
+	memory_throttle_count: AtomicU64,
+
+	// Queue depth sampling
+	writer_queue_depth_samples: AtomicU64,
+	writer_queue_depth_sum: AtomicU64,
+	writer_queue_depth_max: AtomicU64,
+	hasher_queue_depth_samples: AtomicU64,
+	hasher_queue_depth_sum: AtomicU64,
+	hasher_queue_depth_max: AtomicU64,
 }
 
 impl BackupStats {
@@ -47,6 +66,25 @@ impl BackupStats {
 				bytes_hashed: AtomicU64::new(0),
 				backup_root: backup_root.to_path_buf(),
 				session_id: session_id.to_string(),
+
+				// Pipeline timing
+				reader_io_nanos: AtomicU64::new(0),
+				reader_send_writer_nanos: AtomicU64::new(0),
+				reader_send_hasher_nanos: AtomicU64::new(0),
+				hasher_recv_nanos: AtomicU64::new(0),
+				hasher_hash_nanos: AtomicU64::new(0),
+				writer_recv_nanos: AtomicU64::new(0),
+				writer_io_nanos: AtomicU64::new(0),
+				memory_throttle_nanos: AtomicU64::new(0),
+				memory_throttle_count: AtomicU64::new(0),
+
+				// Queue depth sampling
+				writer_queue_depth_samples: AtomicU64::new(0),
+				writer_queue_depth_sum: AtomicU64::new(0),
+				writer_queue_depth_max: AtomicU64::new(0),
+				hasher_queue_depth_samples: AtomicU64::new(0),
+				hasher_queue_depth_sum: AtomicU64::new(0),
+				hasher_queue_depth_max: AtomicU64::new(0),
 			}),
 		}
 	}
@@ -97,6 +135,97 @@ impl BackupStats {
 	/// Get the current elapsed time since backup started
 	pub fn elapsed(&self) -> Duration {
 		self.inner.start_time.elapsed()
+	}
+
+	// Pipeline telemetry methods
+
+	/// Record time spent in reader I/O
+	pub fn add_reader_io_time(&self, nanos: u64) {
+		self.inner
+			.reader_io_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on writer channel send
+	pub fn add_reader_send_writer_time(&self, nanos: u64) {
+		self.inner
+			.reader_send_writer_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on hasher channel send
+	pub fn add_reader_send_hasher_time(&self, nanos: u64) {
+		self.inner
+			.reader_send_hasher_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in hasher receive
+	pub fn add_hasher_recv_time(&self, nanos: u64) {
+		self.inner
+			.hasher_recv_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in MD5 hashing
+	pub fn add_hasher_hash_time(&self, nanos: u64) {
+		self.inner
+			.hasher_hash_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on writer channel receive
+	pub fn add_writer_recv_time(&self, nanos: u64) {
+		self.inner
+			.writer_recv_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in writer I/O
+	pub fn add_writer_io_time(&self, nanos: u64) {
+		self.inner
+			.writer_io_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent waiting on memory throttle
+	pub fn add_memory_throttle_time(&self, nanos: u64) {
+		self.inner
+			.memory_throttle_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Increment memory throttle event count
+	pub fn inc_memory_throttle_count(&self) {
+		self.inner
+			.memory_throttle_count
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Sample writer queue depth
+	pub fn sample_writer_queue_depth(&self, depth: u64) {
+		self.inner
+			.writer_queue_depth_samples
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.writer_queue_depth_sum
+			.fetch_add(depth, Ordering::Relaxed);
+		self.inner
+			.writer_queue_depth_max
+			.fetch_max(depth, Ordering::Relaxed);
+	}
+
+	/// Sample hasher queue depth
+	pub fn sample_hasher_queue_depth(&self, depth: u64) {
+		self.inner
+			.hasher_queue_depth_samples
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.hasher_queue_depth_sum
+			.fetch_add(depth, Ordering::Relaxed);
+		self.inner
+			.hasher_queue_depth_max
+			.fetch_max(depth, Ordering::Relaxed);
 	}
 
 	/// Format duration as HH:MM:SS.mmm
@@ -205,9 +334,233 @@ impl BackupStats {
 			ByteSize(bytes_hashed)
 		)?;
 
+		// Write pipeline stats to file
+		self.write_pipeline_stats(&mut file, elapsed)?;
+
 		println!("\nBackup Statistics saved to: {}", stats_path.display());
 
 		Ok(())
+	}
+
+	/// Format pipeline performance statistics as strings
+	fn format_pipeline_stats(&self, elapsed: Duration) -> Vec<String> {
+		// Load pipeline timing values
+		let reader_io_nanos = self.inner.reader_io_nanos.load(Ordering::Relaxed);
+		let reader_send_writer_nanos = self.inner.reader_send_writer_nanos.load(Ordering::Relaxed);
+		let reader_send_hasher_nanos = self.inner.reader_send_hasher_nanos.load(Ordering::Relaxed);
+		let hasher_recv_nanos = self.inner.hasher_recv_nanos.load(Ordering::Relaxed);
+		let hasher_hash_nanos = self.inner.hasher_hash_nanos.load(Ordering::Relaxed);
+		let writer_recv_nanos = self.inner.writer_recv_nanos.load(Ordering::Relaxed);
+		let writer_io_nanos = self.inner.writer_io_nanos.load(Ordering::Relaxed);
+		let memory_throttle_nanos = self.inner.memory_throttle_nanos.load(Ordering::Relaxed);
+		let memory_throttle_count = self.inner.memory_throttle_count.load(Ordering::Relaxed);
+
+		// Load queue depth values
+		let writer_queue_samples = self
+			.inner
+			.writer_queue_depth_samples
+			.load(Ordering::Relaxed);
+		let writer_queue_sum = self.inner.writer_queue_depth_sum.load(Ordering::Relaxed);
+		let writer_queue_max = self.inner.writer_queue_depth_max.load(Ordering::Relaxed);
+		let hasher_queue_samples = self
+			.inner
+			.hasher_queue_depth_samples
+			.load(Ordering::Relaxed);
+		let hasher_queue_sum = self.inner.hasher_queue_depth_sum.load(Ordering::Relaxed);
+		let hasher_queue_max = self.inner.hasher_queue_depth_max.load(Ordering::Relaxed);
+
+		// Skip if no pipeline activity
+		if reader_io_nanos == 0 {
+			return vec![];
+		}
+
+		let total_elapsed_nanos = elapsed.as_nanos() as u64;
+		let mut lines = vec![
+			String::new(),
+			"Pipeline Performance:".to_string(),
+			String::new(),
+			// Reader thread
+			"Reader Thread:".to_string(),
+			Self::format_time_stat("  I/O", reader_io_nanos, total_elapsed_nanos),
+			Self::format_time_stat(
+				"  Send->Writer",
+				reader_send_writer_nanos,
+				total_elapsed_nanos,
+			),
+			Self::format_time_stat(
+				"  Send->Hasher",
+				reader_send_hasher_nanos,
+				total_elapsed_nanos,
+			),
+			Self::format_time_stat("  Throttle", memory_throttle_nanos, total_elapsed_nanos),
+			String::new(),
+			// Hasher thread
+			"Hasher Thread:".to_string(),
+			Self::format_time_stat("  Blocked (recv)", hasher_recv_nanos, total_elapsed_nanos),
+			Self::format_time_stat("  Hash (MD5)", hasher_hash_nanos, total_elapsed_nanos),
+			String::new(),
+			// Writer thread
+			"Writer Thread:".to_string(),
+			Self::format_time_stat("  Blocked (recv)", writer_recv_nanos, total_elapsed_nanos),
+			Self::format_time_stat("  I/O", writer_io_nanos, total_elapsed_nanos),
+			String::new(),
+			// Queue stats
+			"Queue Stats:".to_string(),
+		];
+		if writer_queue_samples > 0 {
+			let writer_avg = writer_queue_sum as f64 / writer_queue_samples as f64;
+			lines.push(format!(
+				"  Writer Queue: Avg: {:.1}/32 ({:.0}%) | Peak: {}/32",
+				writer_avg,
+				(writer_avg / 32.0) * 100.0,
+				writer_queue_max
+			));
+		}
+		if hasher_queue_samples > 0 {
+			let hasher_avg = hasher_queue_sum as f64 / hasher_queue_samples as f64;
+			lines.push(format!(
+				"  Hasher Queue: Avg: {:.1}/32 ({:.0}%) | Peak: {}/32",
+				hasher_avg,
+				(hasher_avg / 32.0) * 100.0,
+				hasher_queue_max
+			));
+		}
+		lines.push(String::new());
+
+		// Memory throttle
+		if memory_throttle_count > 0 {
+			lines.push("Memory:".to_string());
+			lines.push(format!("  Throttle events: {}", memory_throttle_count));
+			lines.push(String::new());
+		}
+
+		// Bottleneck analysis
+		let analysis = Self::format_bottleneck_analysis(
+			reader_io_nanos,
+			reader_send_writer_nanos + reader_send_hasher_nanos,
+			hasher_recv_nanos,
+			hasher_hash_nanos,
+			writer_recv_nanos,
+			writer_io_nanos,
+			memory_throttle_nanos,
+			writer_queue_samples,
+			writer_queue_sum,
+			hasher_queue_samples,
+			hasher_queue_sum,
+		);
+		lines.extend(analysis);
+
+		lines
+	}
+
+	/// Write pipeline performance statistics to file
+	fn write_pipeline_stats(&self, file: &mut File, elapsed: Duration) -> io::Result<()> {
+		let lines = self.format_pipeline_stats(elapsed);
+		for line in lines {
+			writeln!(file, "{}", line)?;
+		}
+		Ok(())
+	}
+
+	/// Format a single time stat with progress bar
+	fn format_time_stat(label: &str, nanos: u64, total_nanos: u64) -> String {
+		let seconds = nanos as f64 / 1_000_000_000.0;
+		let percentage = if total_nanos > 0 {
+			(nanos as f64 / total_nanos as f64) * 100.0
+		} else {
+			0.0
+		};
+		let bar_width = (percentage / 2.0) as usize; // Scale to fit nicely
+		let bar = "█".repeat(bar_width);
+		format!(
+			"{:<20} {:>7.2}s ({:>5.1}%)  {}",
+			label, seconds, percentage, bar
+		)
+	}
+
+	/// Format bottleneck analysis as strings
+	#[allow(clippy::too_many_arguments)]
+	fn format_bottleneck_analysis(
+		reader_io_nanos: u64,
+		reader_blocked_nanos: u64,
+		hasher_blocked_nanos: u64,
+		hasher_hash_nanos: u64,
+		writer_blocked_nanos: u64,
+		writer_io_nanos: u64,
+		memory_throttle_nanos: u64,
+		writer_queue_samples: u64,
+		writer_queue_sum: u64,
+		hasher_queue_samples: u64,
+		hasher_queue_sum: u64,
+	) -> Vec<String> {
+		let total = reader_io_nanos
+			+ reader_blocked_nanos
+			+ hasher_blocked_nanos
+			+ hasher_hash_nanos
+			+ writer_blocked_nanos
+			+ writer_io_nanos
+			+ memory_throttle_nanos;
+
+		if total == 0 {
+			return vec![];
+		}
+
+		let reader_io_pct = (reader_io_nanos as f64 / total as f64) * 100.0;
+		let hasher_hash_pct = (hasher_hash_nanos as f64 / total as f64) * 100.0;
+		let writer_io_pct = (writer_io_nanos as f64 / total as f64) * 100.0;
+		let memory_throttle_pct = (memory_throttle_nanos as f64 / total as f64) * 100.0;
+
+		let writer_avg = if writer_queue_samples > 0 {
+			writer_queue_sum as f64 / writer_queue_samples as f64
+		} else {
+			0.0
+		};
+		let hasher_avg = if hasher_queue_samples > 0 {
+			hasher_queue_sum as f64 / hasher_queue_samples as f64
+		} else {
+			0.0
+		};
+
+		let mut lines = vec!["Bottleneck Analysis:".to_string()];
+
+		if memory_throttle_pct > 10.0 {
+			lines.push(format!(
+				"  → MEMORY BOTTLENECK: Reader throttled {:.1}% of time",
+				memory_throttle_pct
+			));
+			lines.push("     Increase GLOBAL_MAX_BUFFER or reduce concurrency".to_string());
+		} else if writer_io_pct > 50.0 && writer_avg > 25.0 {
+			lines.push(format!(
+				"  → WRITE I/O BOTTLENECK: Writer busy {:.1}%, queue {:.1}/32 full",
+				writer_io_pct, writer_avg
+			));
+			lines.push("     Destination disk is slow. Consider faster disk.".to_string());
+		} else if reader_io_pct > 60.0 && (writer_avg < 5.0 || hasher_avg < 5.0) {
+			lines.push(format!(
+				"  → READ I/O BOTTLENECK: Reader busy {:.1}%, queues near empty",
+				reader_io_pct
+			));
+			lines.push(
+				"     Source disk is slow. Consider caching or different filesystem.".to_string(),
+			);
+		} else if hasher_hash_pct > 50.0 && hasher_avg < 5.0 {
+			lines.push(format!(
+				"  → CPU/HASH BOTTLENECK: Hasher busy {:.1}%, queue near empty",
+				hasher_hash_pct
+			));
+			lines.push(
+				"     MD5 computation is slow. Consider faster hash or hardware acceleration."
+					.to_string(),
+			);
+		} else {
+			lines.push("  → BALANCED: Pipeline appears well-tuned".to_string());
+			lines.push(format!(
+				"     Reader I/O: {:.1}%, Hasher: {:.1}%, Writer I/O: {:.1}%",
+				reader_io_pct, hasher_hash_pct, writer_io_pct
+			));
+		}
+
+		lines
 	}
 
 	/// Print a summary of the statistics to console
@@ -284,6 +637,17 @@ impl BackupStats {
 			ByteSize(bytes_target_written)
 		);
 		println!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
+
+		// Print pipeline stats
+		self.print_pipeline_stats();
+	}
+
+	/// Print pipeline performance statistics
+	fn print_pipeline_stats(&self) {
+		let lines = self.format_pipeline_stats(self.elapsed());
+		for line in lines {
+			println!("{}", line);
+		}
 	}
 }
 
