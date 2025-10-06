@@ -1,0 +1,801 @@
+use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+const STATS_FILENAME: &str = "disk-hog-backup-stats.txt";
+
+/// Statistics for a backup operation, designed to be thread-safe for parallel processing
+#[derive(Clone)]
+pub struct BackupStats {
+	inner: Arc<BackupStatsInner>,
+}
+
+struct BackupStatsInner {
+	start_time: Instant,
+	start_timestamp: DateTime<Utc>,
+	files_hardlinked: AtomicUsize,
+	files_copied: AtomicUsize,
+	bytes_hardlinked: AtomicU64,
+	bytes_copied: AtomicU64,
+	bytes_source_read: AtomicU64,
+	bytes_target_read: AtomicU64,
+	bytes_target_written: AtomicU64,
+	bytes_hashed: AtomicU64,
+	backup_root: PathBuf,
+	session_id: String,
+
+	// Pipeline timing (nanoseconds) - cumulative across all files
+	reader_io_nanos: AtomicU64,
+	reader_send_writer_nanos: AtomicU64,
+	reader_send_hasher_nanos: AtomicU64,
+	hasher_recv_nanos: AtomicU64,
+	hasher_hash_nanos: AtomicU64,
+	writer_recv_nanos: AtomicU64,
+	writer_io_nanos: AtomicU64,
+	memory_throttle_nanos: AtomicU64,
+	memory_throttle_count: AtomicU64,
+
+	// Queue depth sampling
+	writer_queue_depth_samples: AtomicU64,
+	writer_queue_depth_sum: AtomicU64,
+	writer_queue_depth_max: AtomicU64,
+	hasher_queue_depth_samples: AtomicU64,
+	hasher_queue_depth_sum: AtomicU64,
+	hasher_queue_depth_max: AtomicU64,
+}
+
+impl BackupStats {
+	/// Create a new BackupStats instance for tracking backup statistics
+	pub fn new(backup_root: &Path, session_id: &str) -> Self {
+		BackupStats {
+			inner: Arc::new(BackupStatsInner {
+				start_time: Instant::now(),
+				start_timestamp: Utc::now(),
+				files_hardlinked: AtomicUsize::new(0),
+				files_copied: AtomicUsize::new(0),
+				bytes_hardlinked: AtomicU64::new(0),
+				bytes_copied: AtomicU64::new(0),
+				bytes_source_read: AtomicU64::new(0),
+				bytes_target_read: AtomicU64::new(0),
+				bytes_target_written: AtomicU64::new(0),
+				bytes_hashed: AtomicU64::new(0),
+				backup_root: backup_root.to_path_buf(),
+				session_id: session_id.to_string(),
+
+				// Pipeline timing
+				reader_io_nanos: AtomicU64::new(0),
+				reader_send_writer_nanos: AtomicU64::new(0),
+				reader_send_hasher_nanos: AtomicU64::new(0),
+				hasher_recv_nanos: AtomicU64::new(0),
+				hasher_hash_nanos: AtomicU64::new(0),
+				writer_recv_nanos: AtomicU64::new(0),
+				writer_io_nanos: AtomicU64::new(0),
+				memory_throttle_nanos: AtomicU64::new(0),
+				memory_throttle_count: AtomicU64::new(0),
+
+				// Queue depth sampling
+				writer_queue_depth_samples: AtomicU64::new(0),
+				writer_queue_depth_sum: AtomicU64::new(0),
+				writer_queue_depth_max: AtomicU64::new(0),
+				hasher_queue_depth_samples: AtomicU64::new(0),
+				hasher_queue_depth_sum: AtomicU64::new(0),
+				hasher_queue_depth_max: AtomicU64::new(0),
+			}),
+		}
+	}
+
+	/// Track bytes read from source file
+	pub fn add_source_read(&self, bytes: u64) {
+		self.inner
+			.bytes_source_read
+			.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track bytes read from target (for verification during hardlinking)
+	#[allow(dead_code)]
+	pub fn add_target_read(&self, bytes: u64) {
+		self.inner
+			.bytes_target_read
+			.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track bytes written to target
+	pub fn add_target_written(&self, bytes: u64) {
+		self.inner
+			.bytes_target_written
+			.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track bytes that were hashed
+	pub fn add_hashed(&self, bytes: u64) {
+		self.inner.bytes_hashed.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Record that a file was hardlinked (no new data written)
+	pub fn add_file_hardlinked(&self, file_size: u64) {
+		self.inner.files_hardlinked.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.bytes_hardlinked
+			.fetch_add(file_size, Ordering::Relaxed);
+	}
+
+	/// Record that a file was copied (new data written)
+	pub fn add_file_copied(&self, file_size: u64) {
+		self.inner.files_copied.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.bytes_copied
+			.fetch_add(file_size, Ordering::Relaxed);
+	}
+
+	/// Get the current elapsed time since backup started
+	pub fn elapsed(&self) -> Duration {
+		self.inner.start_time.elapsed()
+	}
+
+	// Pipeline telemetry methods
+
+	/// Record time spent in reader I/O
+	pub fn add_reader_io_time(&self, nanos: u64) {
+		self.inner
+			.reader_io_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on writer channel send
+	pub fn add_reader_send_writer_time(&self, nanos: u64) {
+		self.inner
+			.reader_send_writer_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on hasher channel send
+	pub fn add_reader_send_hasher_time(&self, nanos: u64) {
+		self.inner
+			.reader_send_hasher_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in hasher receive
+	pub fn add_hasher_recv_time(&self, nanos: u64) {
+		self.inner
+			.hasher_recv_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in MD5 hashing
+	pub fn add_hasher_hash_time(&self, nanos: u64) {
+		self.inner
+			.hasher_hash_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent blocked on writer channel receive
+	pub fn add_writer_recv_time(&self, nanos: u64) {
+		self.inner
+			.writer_recv_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent in writer I/O
+	pub fn add_writer_io_time(&self, nanos: u64) {
+		self.inner
+			.writer_io_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Record time spent waiting on memory throttle
+	pub fn add_memory_throttle_time(&self, nanos: u64) {
+		self.inner
+			.memory_throttle_nanos
+			.fetch_add(nanos, Ordering::Relaxed);
+	}
+
+	/// Increment memory throttle event count
+	pub fn inc_memory_throttle_count(&self) {
+		self.inner
+			.memory_throttle_count
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Sample writer queue depth
+	pub fn sample_writer_queue_depth(&self, depth: u64) {
+		self.inner
+			.writer_queue_depth_samples
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.writer_queue_depth_sum
+			.fetch_add(depth, Ordering::Relaxed);
+		self.inner
+			.writer_queue_depth_max
+			.fetch_max(depth, Ordering::Relaxed);
+	}
+
+	/// Sample hasher queue depth
+	pub fn sample_hasher_queue_depth(&self, depth: u64) {
+		self.inner
+			.hasher_queue_depth_samples
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.hasher_queue_depth_sum
+			.fetch_add(depth, Ordering::Relaxed);
+		self.inner
+			.hasher_queue_depth_max
+			.fetch_max(depth, Ordering::Relaxed);
+	}
+
+	/// Format duration as HH:MM:SS.mmm
+	fn format_duration(duration: Duration) -> String {
+		let total_millis = duration.as_millis();
+		let hours = total_millis / 3_600_000;
+		let minutes = (total_millis % 3_600_000) / 60_000;
+		let seconds = (total_millis % 60_000) / 1_000;
+		let millis = total_millis % 1_000;
+		format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+	}
+
+	/// Save the statistics to a formatted text file in the backup root directory
+	pub fn save(&self) -> io::Result<()> {
+		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
+		let mut file = File::create(&stats_path)?;
+
+		let elapsed = self.elapsed();
+		let end_timestamp = Utc::now();
+
+		// Load all values
+		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
+		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
+		let files_total = files_hardlinked + files_copied;
+
+		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
+		let bytes_total = bytes_hardlinked + bytes_copied;
+
+		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
+		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
+		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
+		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
+
+		// Write the formatted stats file
+		writeln!(file, "Backup Summary")?;
+		writeln!(file, "==============")?;
+		writeln!(
+			file,
+			"Program: disk-hog-backup {}",
+			env!("CARGO_PKG_VERSION")
+		)?;
+		writeln!(file, "Time format: HH:MM:SS.mmm")?;
+		writeln!(file, "Sizes: bytes (with human-readable shown)")?;
+		writeln!(file)?;
+		writeln!(file, "Session ID: {}", self.inner.session_id)?;
+		writeln!(file)?;
+		writeln!(file, "Time:")?;
+		writeln!(
+			file,
+			"  Started:  {}",
+			self.inner
+				.start_timestamp
+				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		)?;
+		writeln!(
+			file,
+			"  Finished: {}",
+			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		)?;
+		writeln!(file, "  Duration: {}", Self::format_duration(elapsed))?;
+		writeln!(file)?;
+		writeln!(file, "Backup Set Stats:")?;
+		writeln!(
+			file,
+			"  Hardlinked: {} files, {}",
+			files_hardlinked,
+			ByteSize(bytes_hardlinked)
+		)?;
+		writeln!(
+			file,
+			"  Copied:     {} files, {}",
+			files_copied,
+			ByteSize(bytes_copied)
+		)?;
+		writeln!(
+			file,
+			"  Total:      {} files, {}",
+			files_total,
+			ByteSize(bytes_total)
+		)?;
+		writeln!(file)?;
+		writeln!(file, "I/O:")?;
+		writeln!(
+			file,
+			"  Source Read: {} ({})",
+			bytes_source_read,
+			ByteSize(bytes_source_read)
+		)?;
+		writeln!(
+			file,
+			"  Target Read: {} ({})",
+			bytes_target_read,
+			ByteSize(bytes_target_read)
+		)?;
+		writeln!(
+			file,
+			"  Target Written: {} ({})",
+			bytes_target_written,
+			ByteSize(bytes_target_written)
+		)?;
+		writeln!(
+			file,
+			"  Hashing: {} ({})",
+			bytes_hashed,
+			ByteSize(bytes_hashed)
+		)?;
+
+		// Write pipeline stats to file
+		self.write_pipeline_stats(&mut file, elapsed)?;
+
+		println!("\nBackup Statistics saved to: {}", stats_path.display());
+
+		Ok(())
+	}
+
+	/// Format pipeline performance statistics as strings
+	fn format_pipeline_stats(&self, elapsed: Duration) -> Vec<String> {
+		// Load pipeline timing values
+		let reader_io_nanos = self.inner.reader_io_nanos.load(Ordering::Relaxed);
+		let reader_send_writer_nanos = self.inner.reader_send_writer_nanos.load(Ordering::Relaxed);
+		let reader_send_hasher_nanos = self.inner.reader_send_hasher_nanos.load(Ordering::Relaxed);
+		let hasher_recv_nanos = self.inner.hasher_recv_nanos.load(Ordering::Relaxed);
+		let hasher_hash_nanos = self.inner.hasher_hash_nanos.load(Ordering::Relaxed);
+		let writer_recv_nanos = self.inner.writer_recv_nanos.load(Ordering::Relaxed);
+		let writer_io_nanos = self.inner.writer_io_nanos.load(Ordering::Relaxed);
+		let memory_throttle_nanos = self.inner.memory_throttle_nanos.load(Ordering::Relaxed);
+		let memory_throttle_count = self.inner.memory_throttle_count.load(Ordering::Relaxed);
+
+		// Load queue depth values
+		let writer_queue_samples = self
+			.inner
+			.writer_queue_depth_samples
+			.load(Ordering::Relaxed);
+		let writer_queue_sum = self.inner.writer_queue_depth_sum.load(Ordering::Relaxed);
+		let writer_queue_max = self.inner.writer_queue_depth_max.load(Ordering::Relaxed);
+		let hasher_queue_samples = self
+			.inner
+			.hasher_queue_depth_samples
+			.load(Ordering::Relaxed);
+		let hasher_queue_sum = self.inner.hasher_queue_depth_sum.load(Ordering::Relaxed);
+		let hasher_queue_max = self.inner.hasher_queue_depth_max.load(Ordering::Relaxed);
+
+		// Skip if no pipeline activity
+		if reader_io_nanos == 0 {
+			return vec![];
+		}
+
+		let total_elapsed_nanos = elapsed.as_nanos() as u64;
+		let mut lines = vec![
+			String::new(),
+			"Pipeline Performance:".to_string(),
+			String::new(),
+			// Reader thread
+			"Reader Thread:".to_string(),
+			Self::format_time_stat("  I/O", reader_io_nanos, total_elapsed_nanos),
+			Self::format_time_stat(
+				"  Send->Writer",
+				reader_send_writer_nanos,
+				total_elapsed_nanos,
+			),
+			Self::format_time_stat(
+				"  Send->Hasher",
+				reader_send_hasher_nanos,
+				total_elapsed_nanos,
+			),
+			Self::format_time_stat("  Throttle", memory_throttle_nanos, total_elapsed_nanos),
+			String::new(),
+			// Hasher thread
+			"Hasher Thread:".to_string(),
+			Self::format_time_stat("  Blocked (recv)", hasher_recv_nanos, total_elapsed_nanos),
+			Self::format_time_stat("  Hash (MD5)", hasher_hash_nanos, total_elapsed_nanos),
+			String::new(),
+			// Writer thread
+			"Writer Thread:".to_string(),
+			Self::format_time_stat("  Blocked (recv)", writer_recv_nanos, total_elapsed_nanos),
+			Self::format_time_stat("  I/O", writer_io_nanos, total_elapsed_nanos),
+			String::new(),
+			// Queue stats
+			"Queue Stats:".to_string(),
+		];
+		if writer_queue_samples > 0 {
+			let writer_avg = writer_queue_sum as f64 / writer_queue_samples as f64;
+			lines.push(format!(
+				"  Writer Queue: Avg: {:.1}/32 ({:.0}%) | Peak: {}/32",
+				writer_avg,
+				(writer_avg / 32.0) * 100.0,
+				writer_queue_max
+			));
+		}
+		if hasher_queue_samples > 0 {
+			let hasher_avg = hasher_queue_sum as f64 / hasher_queue_samples as f64;
+			lines.push(format!(
+				"  Hasher Queue: Avg: {:.1}/32 ({:.0}%) | Peak: {}/32",
+				hasher_avg,
+				(hasher_avg / 32.0) * 100.0,
+				hasher_queue_max
+			));
+		}
+		lines.push(String::new());
+
+		// Memory throttle
+		if memory_throttle_count > 0 {
+			lines.push("Memory:".to_string());
+			lines.push(format!("  Throttle events: {}", memory_throttle_count));
+			lines.push(String::new());
+		}
+
+		// Bottleneck analysis
+		let analysis = Self::format_bottleneck_analysis(
+			reader_io_nanos,
+			reader_send_writer_nanos + reader_send_hasher_nanos,
+			hasher_recv_nanos,
+			hasher_hash_nanos,
+			writer_recv_nanos,
+			writer_io_nanos,
+			memory_throttle_nanos,
+			writer_queue_samples,
+			writer_queue_sum,
+			hasher_queue_samples,
+			hasher_queue_sum,
+		);
+		lines.extend(analysis);
+
+		lines
+	}
+
+	/// Write pipeline performance statistics to file
+	fn write_pipeline_stats(&self, file: &mut File, elapsed: Duration) -> io::Result<()> {
+		let lines = self.format_pipeline_stats(elapsed);
+		for line in lines {
+			writeln!(file, "{}", line)?;
+		}
+		Ok(())
+	}
+
+	/// Format a single time stat with progress bar
+	fn format_time_stat(label: &str, nanos: u64, total_nanos: u64) -> String {
+		let seconds = nanos as f64 / 1_000_000_000.0;
+		let percentage = if total_nanos > 0 {
+			(nanos as f64 / total_nanos as f64) * 100.0
+		} else {
+			0.0
+		};
+		let bar_width = (percentage / 2.0) as usize; // Scale to fit nicely
+		let bar = "█".repeat(bar_width);
+		format!(
+			"{:<20} {:>7.2}s ({:>5.1}%)  {}",
+			label, seconds, percentage, bar
+		)
+	}
+
+	/// Format bottleneck analysis as strings
+	#[allow(clippy::too_many_arguments)]
+	fn format_bottleneck_analysis(
+		reader_io_nanos: u64,
+		reader_blocked_nanos: u64,
+		hasher_blocked_nanos: u64,
+		hasher_hash_nanos: u64,
+		writer_blocked_nanos: u64,
+		writer_io_nanos: u64,
+		memory_throttle_nanos: u64,
+		writer_queue_samples: u64,
+		writer_queue_sum: u64,
+		hasher_queue_samples: u64,
+		hasher_queue_sum: u64,
+	) -> Vec<String> {
+		let total = reader_io_nanos
+			+ reader_blocked_nanos
+			+ hasher_blocked_nanos
+			+ hasher_hash_nanos
+			+ writer_blocked_nanos
+			+ writer_io_nanos
+			+ memory_throttle_nanos;
+
+		if total == 0 {
+			return vec![];
+		}
+
+		let reader_io_pct = (reader_io_nanos as f64 / total as f64) * 100.0;
+		let hasher_hash_pct = (hasher_hash_nanos as f64 / total as f64) * 100.0;
+		let writer_io_pct = (writer_io_nanos as f64 / total as f64) * 100.0;
+		let memory_throttle_pct = (memory_throttle_nanos as f64 / total as f64) * 100.0;
+
+		let writer_avg = if writer_queue_samples > 0 {
+			writer_queue_sum as f64 / writer_queue_samples as f64
+		} else {
+			0.0
+		};
+		let hasher_avg = if hasher_queue_samples > 0 {
+			hasher_queue_sum as f64 / hasher_queue_samples as f64
+		} else {
+			0.0
+		};
+
+		let mut lines = vec!["Bottleneck Analysis:".to_string()];
+
+		if memory_throttle_pct > 10.0 {
+			lines.push(format!(
+				"  → MEMORY BOTTLENECK: Reader throttled {:.1}% of time",
+				memory_throttle_pct
+			));
+			lines.push("     Increase GLOBAL_MAX_BUFFER or reduce concurrency".to_string());
+		} else if writer_io_pct > 50.0 && writer_avg > 25.0 {
+			lines.push(format!(
+				"  → WRITE I/O BOTTLENECK: Writer busy {:.1}%, queue {:.1}/32 full",
+				writer_io_pct, writer_avg
+			));
+			lines.push("     Destination disk is slow. Consider faster disk.".to_string());
+		} else if reader_io_pct > 60.0 && (writer_avg < 5.0 || hasher_avg < 5.0) {
+			lines.push(format!(
+				"  → READ I/O BOTTLENECK: Reader busy {:.1}%, queues near empty",
+				reader_io_pct
+			));
+			lines.push(
+				"     Source disk is slow. Consider caching or different filesystem.".to_string(),
+			);
+		} else if hasher_hash_pct > 50.0 && hasher_avg < 5.0 {
+			lines.push(format!(
+				"  → CPU/HASH BOTTLENECK: Hasher busy {:.1}%, queue near empty",
+				hasher_hash_pct
+			));
+			lines.push(
+				"     MD5 computation is slow. Consider faster hash or hardware acceleration."
+					.to_string(),
+			);
+		} else {
+			lines.push("  → BALANCED: Pipeline appears well-tuned".to_string());
+			lines.push(format!(
+				"     Reader I/O: {:.1}%, Hasher: {:.1}%, Writer I/O: {:.1}%",
+				reader_io_pct, hasher_hash_pct, writer_io_pct
+			));
+		}
+
+		lines
+	}
+
+	/// Print a summary of the statistics to console
+	pub fn print_summary(&self) {
+		let elapsed = self.elapsed();
+		let end_timestamp = Utc::now();
+
+		// Load all values
+		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
+		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
+		let files_total = files_hardlinked + files_copied;
+
+		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
+		let bytes_total = bytes_hardlinked + bytes_copied;
+
+		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
+		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
+		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
+		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
+
+		println!("\nBackup Summary");
+		println!("==============");
+		println!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION"));
+		println!("Time format: HH:MM:SS.mmm");
+		println!("Sizes: bytes (with human-readable shown)");
+		println!();
+		println!("Session ID: {}", self.inner.session_id);
+		println!();
+		println!("Time:");
+		println!(
+			"  Started:  {}",
+			self.inner
+				.start_timestamp
+				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		);
+		println!(
+			"  Finished: {}",
+			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		);
+		println!("  Duration: {}", Self::format_duration(elapsed));
+		println!();
+		println!("Backup Set Stats:");
+		println!(
+			"  Hardlinked: {} files, {}",
+			files_hardlinked,
+			ByteSize(bytes_hardlinked)
+		);
+		println!(
+			"  Copied:     {} files, {}",
+			files_copied,
+			ByteSize(bytes_copied)
+		);
+		println!(
+			"  Total:      {} files, {}",
+			files_total,
+			ByteSize(bytes_total)
+		);
+		println!();
+		println!("I/O:");
+		println!(
+			"  Source Read: {} ({})",
+			bytes_source_read,
+			ByteSize(bytes_source_read)
+		);
+		println!(
+			"  Target Read: {} ({})",
+			bytes_target_read,
+			ByteSize(bytes_target_read)
+		);
+		println!(
+			"  Target Written: {} ({})",
+			bytes_target_written,
+			ByteSize(bytes_target_written)
+		);
+		println!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
+
+		// Print pipeline stats
+		self.print_pipeline_stats();
+	}
+
+	/// Print pipeline performance statistics
+	fn print_pipeline_stats(&self) {
+		let lines = self.format_pipeline_stats(self.elapsed());
+		for line in lines {
+			println!("{}", line);
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::thread;
+	use tempfile::tempdir;
+
+	#[test]
+	fn test_backup_stats_creation() {
+		let temp_dir = tempdir().unwrap();
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+
+		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_hardlinked.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_copied.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_source_read.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_target_read.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_target_written.load(Ordering::Relaxed), 0);
+		assert_eq!(stats.inner.bytes_hashed.load(Ordering::Relaxed), 0);
+	}
+
+	#[test]
+	fn test_adding_file_statistics() {
+		let temp_dir = tempdir().unwrap();
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+
+		// Add some I/O operations
+		stats.add_source_read(1024 * 1024); // Read 1 MB from source
+		stats.add_hashed(1024 * 1024); // Hash 1 MB
+		stats.add_file_hardlinked(1024 * 1024); // 1 MB hardlinked
+
+		stats.add_source_read(2 * 1024 * 1024); // Read 2 MB from source
+		stats.add_hashed(2 * 1024 * 1024); // Hash 2 MB
+		stats.add_target_written(2 * 1024 * 1024); // Write 2 MB to target
+		stats.add_file_copied(2 * 1024 * 1024); // 2 MB copied
+
+		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 1);
+		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 1);
+		assert_eq!(
+			stats.inner.bytes_source_read.load(Ordering::Relaxed),
+			3 * 1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_hardlinked.load(Ordering::Relaxed),
+			1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_copied.load(Ordering::Relaxed),
+			2 * 1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_target_written.load(Ordering::Relaxed),
+			2 * 1024 * 1024
+		);
+		assert_eq!(
+			stats.inner.bytes_hashed.load(Ordering::Relaxed),
+			3 * 1024 * 1024
+		);
+	}
+
+	#[test]
+	fn test_thread_safety() {
+		let temp_dir = tempdir().unwrap();
+		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+
+		let threads: Vec<_> = (0..10)
+			.map(|_| {
+				let stats_clone = stats.clone();
+				thread::spawn(move || {
+					for _ in 0..100 {
+						stats_clone.add_source_read(1024);
+						stats_clone.add_hashed(1024);
+						stats_clone.add_file_hardlinked(512);
+						stats_clone.add_file_copied(512);
+					}
+				})
+			})
+			.collect();
+
+		for t in threads {
+			t.join().unwrap();
+		}
+
+		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 1000);
+		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 1000);
+		assert_eq!(
+			stats.inner.bytes_source_read.load(Ordering::Relaxed),
+			1000 * 1024
+		);
+	}
+
+	#[test]
+	fn test_save_stats_format() {
+		let temp_dir = tempdir().unwrap();
+		let backup_path = temp_dir.path().join("backup");
+		std::fs::create_dir(&backup_path).unwrap();
+		let stats = BackupStats::new(&backup_path, "dhb-set-20250929-131320");
+
+		// Add some data
+		stats.add_source_read(7 * 1024 * 1024 * 1024); // 7 GB read
+		stats.add_hashed(7 * 1024 * 1024 * 1024); // 7 GB hashed
+		stats.add_file_hardlinked(3 * 1024 * 1024 * 1024); // 3 GB hardlinked
+		stats.add_file_copied(2 * 1024 * 1024 * 1024); // 2 GB copied
+		stats.add_target_written(2 * 1024 * 1024 * 1024); // 2 GB written
+
+		// Sleep briefly to get non-zero timing
+		thread::sleep(Duration::from_millis(10));
+
+		// Save stats
+		stats.save().unwrap();
+
+		// Read and verify file contents
+		let stats_path = backup_path.join(STATS_FILENAME);
+		let contents = std::fs::read_to_string(stats_path).unwrap();
+
+		// Verify key sections exist
+		assert!(contents.contains("Backup Summary"));
+		assert!(contents.contains("Session ID: dhb-set-20250929-131320"));
+		assert!(contents.contains("Time:"));
+		assert!(contents.contains("Backup Set Stats:"));
+		assert!(contents.contains("I/O:"));
+
+		// Verify data is present
+		assert!(contents.contains("Hardlinked: 1 files"));
+		assert!(contents.contains("Copied:     1 files"));
+		assert!(contents.contains("Total:      2 files"));
+	}
+
+	#[test]
+	fn test_format_duration() {
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(0)),
+			"00:00:00.000"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(123)),
+			"00:00:00.123"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(65_123)),
+			"00:01:05.123"
+		);
+		assert_eq!(
+			BackupStats::format_duration(Duration::from_millis(3_665_123)),
+			"01:01:05.123"
+		);
+	}
+}

@@ -816,3 +816,222 @@ pub fn create_test_file(base_folder: &str, path: &str, contents: &str) -> io::Re
 	io::Write::write_all(&mut file, contents.as_bytes())?;
 	Ok(())
 }
+
+#[test]
+fn test_backup_stats_functionality() -> io::Result<()> {
+	// Set up source directory with multiple test files of different sizes
+	let source = create_tmp_folder("stats_source")?;
+
+	// Create different types of files to test stats
+	create_test_file(&source, "small.txt", "Small file content")?; // ~18 bytes
+	create_test_file(&source, "medium.txt", &"x".repeat(1024))?; // 1KB
+	create_test_file(&source, "large.txt", &"y".repeat(10 * 1024))?; // 10KB
+	create_test_file(&source, "nested/deep.txt", "Nested file")?; // ~11 bytes
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("stats_backups")?;
+
+	// Run first backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup set directory (should be only one)
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
+
+	let backup_set_path = backup_sets[0].path();
+
+	// Verify that the stats file was created
+	let stats_file = backup_set_path.join("disk-hog-backup-stats.txt");
+	assert!(
+		stats_file.exists(),
+		"Stats file should exist: {}",
+		stats_file.display()
+	);
+
+	// Read the stats file
+	let stats_content = fs::read_to_string(&stats_file)?;
+
+	// Verify the new format contains expected sections
+	assert!(
+		stats_content.contains("Backup Summary"),
+		"Should have Backup Summary header"
+	);
+	assert!(
+		stats_content.contains("Session ID:"),
+		"Should have Session ID"
+	);
+	assert!(stats_content.contains("Time:"), "Should have Time section");
+	assert!(
+		stats_content.contains("Backup Set Stats:"),
+		"Should have Backup Set Stats section"
+	);
+	assert!(stats_content.contains("I/O:"), "Should have I/O section");
+	assert!(
+		stats_content.contains("Started:"),
+		"Should have start timestamp"
+	);
+	assert!(
+		stats_content.contains("Finished:"),
+		"Should have end timestamp"
+	);
+
+	// Verify first backup had all files copied (no hardlinks)
+	assert!(
+		stats_content.contains("Copied:     4 files"),
+		"Should have copied 4 files in first backup"
+	);
+	assert!(
+		stats_content.contains("Hardlinked: 0 files"),
+		"Should have no hardlinked files in first backup"
+	);
+	assert!(
+		stats_content.contains("Total:      4 files"),
+		"Should have 4 total files"
+	);
+
+	// Sleep to ensure different backup set names (they're based on timestamp)
+	thread::sleep(time::Duration::from_secs(2));
+
+	// Now run a second backup to test hardlinking stats
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup sets again
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(
+		backup_sets.len(),
+		2,
+		"Should have exactly two backup sets after second backup"
+	);
+
+	// Find the newer backup set (by modification time)
+	let mut backup_set_paths: Vec<_> = backup_sets
+		.iter()
+		.map(|entry| {
+			let path = entry.path();
+			let metadata = path.metadata().unwrap();
+			(path, metadata.modified().unwrap())
+		})
+		.collect();
+	backup_set_paths.sort_by_key(|(_, modified)| *modified);
+	let second_backup_path = &backup_set_paths[1].0;
+
+	// Read stats from second backup
+	let second_stats_file = second_backup_path.join("disk-hog-backup-stats.txt");
+	assert!(
+		second_stats_file.exists(),
+		"Second backup stats file should exist"
+	);
+
+	let second_stats_content = fs::read_to_string(&second_stats_file)?;
+
+	// Verify second backup had all files hardlinked (no copies)
+	assert!(
+		second_stats_content.contains("Hardlinked: 4 files"),
+		"Should have hardlinked 4 files in second backup"
+	);
+	assert!(
+		second_stats_content.contains("Copied:     0 files"),
+		"Should have no copied files in second backup"
+	);
+	assert!(
+		second_stats_content.contains("Total:      4 files"),
+		"Should still have 4 total files"
+	);
+
+	println!("✓ Stats functionality test passed!");
+	println!("  First backup: All files copied (no hardlinks)");
+	println!("  Second backup: All files hardlinked (space saved)");
+
+	Ok(())
+}
+
+#[test]
+fn test_backup_with_directory_symlink_loop() -> io::Result<()> {
+	// This test verifies that the backup doesn't infinite loop when
+	// encountering directory symlinks that create cycles
+
+	let source = create_tmp_folder("symlink_loop_source")?;
+
+	// Create a real file in the root
+	create_test_file(&source, "root_file.txt", "root content")?;
+
+	// Create a subdirectory with a file
+	let subdir = Path::new(&source).join("subdir");
+	fs::create_dir(&subdir)?;
+	create_test_file(
+		subdir.to_str().unwrap(),
+		"subdir_file.txt",
+		"subdir content",
+	)?;
+
+	// Create a symlink in subdir that points back to the parent directory
+	// This creates a cycle: source -> subdir -> link_to_parent -> source
+	let symlink_to_parent = subdir.join("link_to_parent");
+	std::os::unix::fs::symlink(&source, &symlink_to_parent)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("symlink_loop_backups")?;
+
+	// Run backup command - should complete without infinite loop
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup set directory
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
+	let backup_set = &backup_sets[0];
+
+	// Verify the real files were backed up
+	let backed_up_root_file = backup_set.path().join("root_file.txt");
+	assert!(
+		backed_up_root_file.exists(),
+		"Root file should be backed up"
+	);
+	assert_eq!(
+		fs::read_to_string(&backed_up_root_file)?,
+		"root content",
+		"Root file content should match"
+	);
+
+	let backed_up_subdir_file = backup_set.path().join("subdir/subdir_file.txt");
+	assert!(
+		backed_up_subdir_file.exists(),
+		"Subdir file should be backed up"
+	);
+	assert_eq!(
+		fs::read_to_string(&backed_up_subdir_file)?,
+		"subdir content",
+		"Subdir file content should match"
+	);
+
+	// Verify the symlink was created as a symlink (not followed)
+	let backed_up_symlink = backup_set.path().join("subdir/link_to_parent");
+	assert!(backed_up_symlink.exists(), "Symlink should exist in backup");
+	assert!(
+		backed_up_symlink.is_symlink(),
+		"Should be a symlink, not a directory"
+	);
+
+	println!("✓ Directory symlink loop test passed!");
+	println!("  Symlink was preserved, not followed");
+	println!("  No infinite loop occurred");
+
+	Ok(())
+}

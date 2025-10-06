@@ -31,6 +31,7 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 		source,
 		backup_set_path.to_str().unwrap(),
 		prev_backup.as_deref(),
+		&backup_set_name,
 	)?;
 
 	Ok(backup_set_name)

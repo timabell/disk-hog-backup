@@ -26,20 +26,17 @@ This ADR was created by discussing extensively with chatgpt possible approaches.
 We will implement a **unified streaming pipeline** that integrates reading, hashing, and writing in a single pass. The pipeline is designed as follows:
 
 - **Reader Thread:**  
-  Reads the file in fixed-size chunks (e.g., 256KB per chunk) and updates the MD5 hasher on the fly. Each chunk is sent into a bounded channel, which serves as a read-ahead buffer. This bounded channel limits how far the reader can get ahead of the writer, ensuring that we do not accumulate excessive data in memory.
+  Reads the file in fixed-size chunks (e.g., 256KB per chunk) and updates the MD5 hasher on the fly. Each chunk is sent into a bounded channel, which serves as a read-ahead buffer. This bounded channel limits how far the reader can get ahead of the writer, ensuring that we do not accumulate excessive data in memory. Once the file is fully read, the reader finalizes the MD5 hash and compares it with the expected hash (if provided). If they match, it sets a cancellation flag to signal the writer to stop processing any remaining buffered chunks.
 
 - **Writer Thread:**  
-  Consumes chunks from the channel and writes them to the destination file. Before writing each chunk, the writer checks a shared cancellation flag. If cancellation is signaled (i.e., the computed MD5 already matches the expected hash), the writer stops and deletes any partially written file.
-
-- **MD5 Monitor Thread:**  
-  Once the reader finishes processing, it sends the final MD5 hash on a dedicated channel. The monitor thread compares this computed hash with the expected MD5 (from the existing target file). If they match, it sets the cancellation flag, signaling the writer to abort further writes.
+  Consumes chunks from the channel and writes them to the destination file. Before writing each chunk, the writer checks a shared cancellation flag. If cancellation is signaled (i.e., the computed MD5 matches the expected hash and the reader has set the flag), the writer stops and deletes any partially written file. This allows the writer to avoid writing remaining buffered chunks when the source matches a previous backup.
 
 - **Global Memory Usage Control:**  
   When processing multiple files concurrently, a global memory usage counter (using an `AtomicUsize`) tracks the total bytes buffered across all pipelines. This ensures that the combined read-ahead does not exceed a preset limit (e.g., 4GB).
 
-This unified approach automatically adapts:
-- For **small files**, the entire file may be buffered and hashed before any writes occur, leading to a cancellation of the write if the MD5 matches.
-- For **large files**, the reader can get several chunks (even gigabytes) ahead of the writer. If the MD5 eventually matches, the expensive write can be aborted mid-stream.
+This two-thread approach automatically adapts:
+- For **small files**, the entire file may be buffered before the writer completes. When the reader finishes and finds a hash match, the writer can skip any remaining buffered chunks.
+- For **large files**, the reader can get several chunks (up to 32 chunks = 8MB) ahead of the writer. When the reader finishes computing the MD5 and finds a match, the writer can abort processing the remaining buffered chunks, potentially saving writes to slow disks.
 
 ## Alternatives Considered
 
@@ -69,23 +66,23 @@ This unified approach automatically adapts:
 
 ## Rationale
 
-The unified streaming pipeline:
+The two-thread streaming pipeline:
 - **Eliminates duplicate reads:** Each file is read once for both copying and hashing.
-- **Enables pre-emptive cancellation:** Read-ahead allows the MD5 to be computed before the entire file is written. If the hash matches, the write is cancelled early.
-- **Manages memory usage effectively:** Bounded channels and a global memory counter ensure that even with multiple files, we remain within safe memory limits.
-- **Simplifies concurrency:** Rather than parallelizing the read or write stages within a single file, we process multiple files concurrently with simple per-file pipelines.
+- **Enables selective write cancellation:** When the source MD5 matches a previous backup, the writer can stop processing remaining buffered chunks (up to 8MB), potentially avoiding some writes to slow disks.
+- **Manages memory usage effectively:** Bounded channels (32 chunks per file) and a global memory counter ensure that even with multiple files, we remain within safe memory limits.
+- **Simplifies architecture:** Using only two threads (reader + writer) eliminates unnecessary coordination complexity. The reader performs MD5 comparison inline after completing the hash, eliminating the need for a separate monitor thread.
 
 ## Consequences
 
-- **Performance:**  
+- **Performance:**
   - Reduced disk I/O and avoidance of unnecessary writes lead to better overall performance.
-  - The reader can get ahead and potentially cancel the write early, saving time on slow writes (especially on HDDs or USB-connected SSDs).
+  - When MD5 hashes match, the writer can skip up to 8MB of remaining buffered chunks, providing modest savings on slow write paths (especially on HDDs or USB-connected SSDs).
 
-- **Memory Management:**  
-  - Memory usage is bounded by the channel size and the global limit, but proper tuning is essential.
-  
-- **Complexity:**  
-  - Managing three coordinated threads (reader, writer, MD5 monitor) per file adds some complexity.
+- **Memory Management:**
+  - Memory usage is bounded by the channel size (32 chunks × 256KB = 8MB per file) and the global limit (4GB), but proper tuning is essential.
+
+- **Complexity:**
+  - Managing two coordinated threads (reader, writer) per file is simple and straightforward.
   - Cancellation logic must be carefully implemented to handle partially written files.
 
 - **Scalability:**  
@@ -116,10 +113,11 @@ const GLOBAL_MAX_BUFFER: usize = 4 * 1024 * 1024 * 1024; // 4GB across all files
 // Reads the source file in chunks, updating the MD5 hasher and sending chunks to the writer.
 fn stream_file(
     src_path: &str,
-    data_tx: Sender<(Vec<u8>, bool)>,
-    md5_tx: Sender<Vec<u8>>,
+    data_tx: Sender<Vec<u8>>,
+    md5_tx: Sender<(bool, Vec<u8>)>,
     cancel_flag: Arc<AtomicBool>,
     global_memory: Arc<AtomicUsize>,
+    expected_md5: Option<Vec<u8>>,
 ) {
     let mut file = File::open(src_path).expect("Failed to open source file");
     let mut hasher = Context::new();
@@ -144,29 +142,32 @@ fn stream_file(
         }
         global_memory.fetch_add(bytes_read, Ordering::SeqCst);
 
-        let is_last = bytes_read < CHUNK_SIZE;
-        data_tx.send((chunk, is_last)).expect("Failed to send data chunk");
-
-        if cancel_flag.load(Ordering::SeqCst) {
-            break;
-        }
+        data_tx.send(chunk).expect("Failed to send data chunk");
     }
 
+    // Finalize MD5 and compare with expected if provided
     let final_md5 = hasher.compute();
-    md5_tx.send(final_md5.0.to_vec()).expect("Failed to send MD5 digest");
+    let matches = expected_md5.as_ref().map_or(false, |expected| &final_md5.0[..] == &expected[..]);
+
+    // Signal writer to cancel if hashes match
+    if matches {
+        cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    md5_tx.send((matches, final_md5.0.to_vec())).expect("Failed to send MD5 digest");
 }
 
 // Consumes chunks from the channel and writes them to the destination file.
 // Stops writing if cancellation is signaled.
 fn write_file(
     dst_path: &str,
-    data_rx: Receiver<(Vec<u8>, bool)>,
+    data_rx: Receiver<Vec<u8>>,
     cancel_flag: Arc<AtomicBool>,
     global_memory: Arc<AtomicUsize>,
 ) {
     let mut file = File::create(dst_path).expect("Failed to create destination file");
 
-    for (chunk, is_last) in data_rx.iter() {
+    for chunk in data_rx.iter() {
         if cancel_flag.load(Ordering::SeqCst) {
             break;
         }
@@ -176,10 +177,6 @@ fn write_file(
             break;
         }
         global_memory.fetch_sub(chunk.len(), Ordering::SeqCst);
-
-        if is_last {
-            break;
-        }
     }
 
     if cancel_flag.load(Ordering::SeqCst) {
@@ -187,27 +184,15 @@ fn write_file(
     }
 }
 
-// Monitors the computed MD5. If it matches the expected hash, signals cancellation.
-fn monitor_md5(
-    md5_rx: Receiver<Vec<u8>>,
-    cancel_flag: Arc<AtomicBool>,
-    expected_md5: Vec<u8>,
-) {
-    let computed_md5 = md5_rx.recv().expect("Failed to receive MD5 digest");
-    if computed_md5 == expected_md5 {
-        cancel_flag.store(true, Ordering::SeqCst);
-    }
-}
-
-// Processes a single file by spawning the reader, writer, and MD5 monitor threads.
+// Processes a single file by spawning the reader and writer threads.
 fn process_file(
     src: &str,
     dst: &str,
-    expected_md5: Vec<u8>,
+    expected_md5: Option<Vec<u8>>,
     global_memory: Arc<AtomicUsize>,
 ) {
-    let (data_tx, data_rx) = bounded::<(Vec<u8>, bool)>(MAX_QUEUE_CHUNKS);
-    let (md5_tx, md5_rx) = bounded::<Vec<u8>>(1);
+    let (data_tx, data_rx) = bounded::<Vec<u8>>(MAX_QUEUE_CHUNKS);
+    let (md5_tx, md5_rx) = bounded::<(bool, Vec<u8>)>(1);
     let cancel_flag = Arc::new(AtomicBool::new(false));
 
     let src_path = src.to_string();
@@ -215,7 +200,7 @@ fn process_file(
     let mem_for_reader = Arc::clone(&global_memory);
     let cancel_for_reader = Arc::clone(&cancel_flag);
     let reader_handle = thread::spawn(move || {
-        stream_file(&src_path, data_tx, md5_tx, cancel_for_reader, mem_for_reader)
+        stream_file(&src_path, data_tx, md5_tx, cancel_for_reader, mem_for_reader, expected_md5)
     });
 
     let mem_for_writer = Arc::clone(&global_memory);
@@ -224,23 +209,20 @@ fn process_file(
         write_file(&dst_path, data_rx, cancel_for_writer, mem_for_writer)
     });
 
-    let cancel_for_monitor = Arc::clone(&cancel_flag);
-    let monitor_handle = thread::spawn(move || {
-        monitor_md5(md5_rx, cancel_for_monitor, expected_md5)
-    });
-
     reader_handle.join().unwrap();
-    monitor_handle.join().unwrap();
     writer_handle.join().unwrap();
+
+    // Get the MD5 comparison result
+    let (_matches, _computed_md5) = md5_rx.recv().expect("Failed to receive MD5 result");
 }
 
 fn main() {
     // Example list of files to process: (source, destination, expected_md5)
-    // For demonstration, the expected MD5 is set to 16 zero bytes.
+    // For demonstration, the expected MD5 is set to Some(16 zero bytes).
     let files = vec![
-        ("source1.file", "dest1.file", vec![0u8; 16]),
-        ("source2.file", "dest2.file", vec![0u8; 16]),
-        ("source3.file", "dest3.file", vec![0u8; 16]),
+        ("source1.file", "dest1.file", Some(vec![0u8; 16])),
+        ("source2.file", "dest2.file", Some(vec![0u8; 16])),
+        ("source3.file", "dest3.file", None), // No expected hash
     ];
 
     let global_memory = Arc::new(AtomicUsize::new(0));
@@ -250,7 +232,6 @@ fn main() {
         let global_mem_clone = Arc::clone(&global_memory);
         let src = src.to_string();
         let dst = dst.to_string();
-        let expected_md5 = expected_md5.clone();
         let handle = thread::spawn(move || {
             process_file(&src, &dst, expected_md5, global_mem_clone);
         });
