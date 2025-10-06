@@ -239,9 +239,9 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 
 	assert!(output.status.success(), "backup command should succeed");
 
-	// Extract set name from output message
-	let stdout = String::from_utf8(output.stdout)?;
-	let set_name = stdout
+	// Extract set name from stderr (all output goes to stderr for progress display)
+	let stderr = String::from_utf8(output.stderr)?;
+	let set_name = stderr
 		.lines()
 		.find(|line| line.contains("backing up") && line.contains("into"))
 		.and_then(|line| {

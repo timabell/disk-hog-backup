@@ -50,11 +50,22 @@ struct BackupStatsInner {
 
 	// Terminal detection for interactive progress display
 	is_terminal: bool,
+
+	// Total size of source (for progress percentage)
+	total_bytes: u64,
+
+	// Time taken to calculate total size
+	size_calc_duration: Duration,
 }
 
 impl BackupStats {
 	/// Create a new BackupStats instance for tracking backup statistics
-	pub fn new(backup_root: &Path, session_id: &str) -> Self {
+	pub fn new(
+		backup_root: &Path,
+		session_id: &str,
+		total_bytes: u64,
+		size_calc_duration: Duration,
+	) -> Self {
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
 				start_time: Instant::now(),
@@ -91,6 +102,9 @@ impl BackupStats {
 
 				// Check if stderr is a terminal for interactive progress
 				is_terminal: std::io::stderr().is_terminal(),
+
+				total_bytes,
+				size_calc_duration,
 			}),
 		}
 	}
@@ -286,6 +300,11 @@ impl BackupStats {
 			self.inner
 				.start_timestamp
 				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+		)?;
+		writeln!(
+			file,
+			"  Size Calc: {}",
+			Self::format_duration(self.inner.size_calc_duration)
 		)?;
 		writeln!(
 			file,
@@ -604,6 +623,10 @@ impl BackupStats {
 				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
 		);
 		eprintln!(
+			"  Size Calc: {}",
+			Self::format_duration(self.inner.size_calc_duration)
+		);
+		eprintln!(
 			"  Finished: {}",
 			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
 		);
@@ -665,8 +688,17 @@ impl BackupStats {
 		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
 			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
 		let processed_gb = processed as f64 / 1_000_000_000.0;
+		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
 
-		eprint!("\rProgress: {:.2}GB processed", processed_gb);
+		if self.inner.total_bytes > 0 {
+			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+			eprint!(
+				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%)",
+				processed_gb, total_gb, percentage
+			);
+		} else {
+			eprint!("\rProgress: {:.2}GB processed", processed_gb);
+		}
 	}
 
 	/// Clear the progress display line before printing a log message
@@ -698,7 +730,12 @@ mod tests {
 	#[test]
 	fn test_backup_stats_creation() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 0);
 		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 0);
@@ -713,7 +750,12 @@ mod tests {
 	#[test]
 	fn test_adding_file_statistics() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		// Add some I/O operations
 		stats.add_source_read(1024 * 1024); // Read 1 MB from source
@@ -752,7 +794,12 @@ mod tests {
 	#[test]
 	fn test_thread_safety() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		let threads: Vec<_> = (0..10)
 			.map(|_| {
@@ -785,7 +832,12 @@ mod tests {
 		let temp_dir = tempdir().unwrap();
 		let backup_path = temp_dir.path().join("backup");
 		std::fs::create_dir(&backup_path).unwrap();
-		let stats = BackupStats::new(&backup_path, "dhb-set-20250929-131320");
+		let stats = BackupStats::new(
+			&backup_path,
+			"dhb-set-20250929-131320",
+			0,
+			Duration::from_secs(0),
+		);
 
 		// Add some data
 		stats.add_source_read(7 * 1024 * 1024 * 1024); // 7 GB read

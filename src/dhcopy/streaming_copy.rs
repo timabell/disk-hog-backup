@@ -31,11 +31,16 @@ pub struct BackupContext {
 }
 
 impl BackupContext {
-	pub fn new(backup_root: &Path, session_id: &str) -> Self {
+	pub fn new(
+		backup_root: &Path,
+		session_id: &str,
+		total_bytes: u64,
+		size_calc_duration: Duration,
+	) -> Self {
 		BackupContext {
 			prev_md5_store: None,
 			new_md5_store: Md5Store::new(backup_root),
-			stats: BackupStats::new(backup_root, session_id),
+			stats: BackupStats::new(backup_root, session_id, total_bytes, size_calc_duration),
 		}
 	}
 
@@ -43,10 +48,12 @@ impl BackupContext {
 		backup_root: &Path,
 		prev_backup: &Path,
 		session_id: &str,
+		total_bytes: u64,
+		size_calc_duration: Duration,
 	) -> io::Result<Self> {
 		let prev_md5_store = Md5Store::load_from_backup(prev_backup)?;
 		let new_md5_store = Md5Store::new(backup_root);
-		let stats = BackupStats::new(backup_root, session_id);
+		let stats = BackupStats::new(backup_root, session_id, total_bytes, size_calc_duration);
 
 		Ok(BackupContext {
 			prev_md5_store: Some(prev_md5_store),
