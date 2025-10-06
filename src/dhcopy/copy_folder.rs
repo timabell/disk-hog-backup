@@ -296,7 +296,11 @@ fn process_directory_recursive(
 			// Output the full path of the file being processed with size
 			let file_size = entry_path.metadata()?.len();
 			context.stats.clear_progress_line();
-			eprintln!("Processing: {} ({})", entry_path.display(), ByteSize(file_size));
+			eprintln!(
+				"Processing: {} ({})",
+				entry_path.display(),
+				ByteSize(file_size)
+			);
 			context.stats.update_progress_display();
 
 			// Copy the file with streaming

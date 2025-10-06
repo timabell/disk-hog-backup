@@ -615,7 +615,8 @@ impl BackupStats {
 			let remaining_str = Self::format_duration(remaining);
 
 			// Calculate ETA timestamp in local time
-			let eta_timestamp = chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
+			let eta_timestamp =
+				chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
 			let eta_str = eta_timestamp.format("%H:%M:%S").to_string();
 
 			eprint!(
@@ -629,7 +630,10 @@ impl BackupStats {
 				processed_gb, total_gb, percentage, elapsed_str
 			);
 		} else {
-			eprint!("\rProgress: {:.2}GB processed - {}", processed_gb, elapsed_str);
+			eprint!(
+				"\rProgress: {:.2}GB processed - {}",
+				processed_gb, elapsed_str
+			);
 		}
 	}
 
