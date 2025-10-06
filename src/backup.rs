@@ -18,9 +18,9 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 	let backup_set_path = Path::new(dest).join(&backup_set_name);
 	fs::create_dir_all(&backup_set_path)?;
 
-	println!("Backing up {} into {:?} …", source, backup_set_path);
+	eprintln!("Backing up {} into {:?} …", source, backup_set_path);
 	if let Some(ref prev_backup) = prev_backup {
-		println!(
+		eprintln!(
 			"Found previous backup set to use for hard-linking: {}",
 			prev_backup
 		);

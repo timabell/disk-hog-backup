@@ -1,7 +1,7 @@
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -47,11 +47,25 @@ struct BackupStatsInner {
 	hasher_queue_depth_samples: AtomicU64,
 	hasher_queue_depth_sum: AtomicU64,
 	hasher_queue_depth_max: AtomicU64,
+
+	// Terminal detection for interactive progress display
+	is_terminal: bool,
+
+	// Total size of source (for progress percentage)
+	total_bytes: u64,
+
+	// Time taken to calculate total size
+	size_calc_duration: Duration,
 }
 
 impl BackupStats {
 	/// Create a new BackupStats instance for tracking backup statistics
-	pub fn new(backup_root: &Path, session_id: &str) -> Self {
+	pub fn new(
+		backup_root: &Path,
+		session_id: &str,
+		total_bytes: u64,
+		size_calc_duration: Duration,
+	) -> Self {
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
 				start_time: Instant::now(),
@@ -85,6 +99,12 @@ impl BackupStats {
 				hasher_queue_depth_samples: AtomicU64::new(0),
 				hasher_queue_depth_sum: AtomicU64::new(0),
 				hasher_queue_depth_max: AtomicU64::new(0),
+
+				// Check if stderr is a terminal for interactive progress
+				is_terminal: std::io::stderr().is_terminal(),
+
+				total_bytes,
+				size_calc_duration,
 			}),
 		}
 	}
@@ -238,11 +258,8 @@ impl BackupStats {
 		format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
 	}
 
-	/// Save the statistics to a formatted text file in the backup root directory
-	pub fn save(&self) -> io::Result<()> {
-		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
-		let mut file = File::create(&stats_path)?;
-
+	/// Format the backup summary as a vector of lines
+	fn format_summary(&self) -> Vec<String> {
 		let elapsed = self.elapsed();
 		let end_timestamp = Utc::now();
 
@@ -260,84 +277,84 @@ impl BackupStats {
 		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
 		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
 
-		// Write the formatted stats file
-		writeln!(file, "Backup Summary")?;
-		writeln!(file, "==============")?;
-		writeln!(
-			file,
-			"Program: disk-hog-backup {}",
-			env!("CARGO_PKG_VERSION")
-		)?;
-		writeln!(file, "Time format: HH:MM:SS.mmm")?;
-		writeln!(file, "Sizes: bytes (with human-readable shown)")?;
-		writeln!(file)?;
-		writeln!(file, "Session ID: {}", self.inner.session_id)?;
-		writeln!(file)?;
-		writeln!(file, "Time:")?;
-		writeln!(
-			file,
-			"  Started:  {}",
-			self.inner
-				.start_timestamp
-				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
-		)?;
-		writeln!(
-			file,
-			"  Finished: {}",
-			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
-		)?;
-		writeln!(file, "  Duration: {}", Self::format_duration(elapsed))?;
-		writeln!(file)?;
-		writeln!(file, "Backup Set Stats:")?;
-		writeln!(
-			file,
-			"  Hardlinked: {} files, {}",
-			files_hardlinked,
-			ByteSize(bytes_hardlinked)
-		)?;
-		writeln!(
-			file,
-			"  Copied:     {} files, {}",
-			files_copied,
-			ByteSize(bytes_copied)
-		)?;
-		writeln!(
-			file,
-			"  Total:      {} files, {}",
-			files_total,
-			ByteSize(bytes_total)
-		)?;
-		writeln!(file)?;
-		writeln!(file, "I/O:")?;
-		writeln!(
-			file,
-			"  Source Read: {} ({})",
-			bytes_source_read,
-			ByteSize(bytes_source_read)
-		)?;
-		writeln!(
-			file,
-			"  Target Read: {} ({})",
-			bytes_target_read,
-			ByteSize(bytes_target_read)
-		)?;
-		writeln!(
-			file,
-			"  Target Written: {} ({})",
-			bytes_target_written,
-			ByteSize(bytes_target_written)
-		)?;
-		writeln!(
-			file,
-			"  Hashing: {} ({})",
-			bytes_hashed,
-			ByteSize(bytes_hashed)
-		)?;
+		let mut lines = vec![
+			"Backup Summary".to_string(),
+			"==============".to_string(),
+			format!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION")),
+			"Time format: HH:MM:SS.mmm".to_string(),
+			"Sizes: bytes (with human-readable shown)".to_string(),
+			String::new(),
+			format!("Session ID: {}", self.inner.session_id),
+			String::new(),
+			"Time:".to_string(),
+			format!(
+				"  Started:  {}",
+				self.inner
+					.start_timestamp
+					.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+			),
+			format!(
+				"  Size Calc: {}",
+				Self::format_duration(self.inner.size_calc_duration)
+			),
+			format!(
+				"  Finished: {}",
+				end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
+			),
+			format!("  Duration: {}", Self::format_duration(elapsed)),
+			String::new(),
+			"Backup Set Stats:".to_string(),
+			format!(
+				"  Hardlinked: {} files, {}",
+				files_hardlinked,
+				ByteSize(bytes_hardlinked)
+			),
+			format!(
+				"  Copied:     {} files, {}",
+				files_copied,
+				ByteSize(bytes_copied)
+			),
+			format!(
+				"  Total:      {} files, {}",
+				files_total,
+				ByteSize(bytes_total)
+			),
+			String::new(),
+			"I/O:".to_string(),
+			format!(
+				"  Source Read: {} ({})",
+				bytes_source_read,
+				ByteSize(bytes_source_read)
+			),
+			format!(
+				"  Target Read: {} ({})",
+				bytes_target_read,
+				ByteSize(bytes_target_read)
+			),
+			format!(
+				"  Target Written: {} ({})",
+				bytes_target_written,
+				ByteSize(bytes_target_written)
+			),
+			format!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed)),
+		];
 
-		// Write pipeline stats to file
-		self.write_pipeline_stats(&mut file, elapsed)?;
+		// Add pipeline stats
+		lines.extend(self.format_pipeline_stats(elapsed));
 
-		println!("\nBackup Statistics saved to: {}", stats_path.display());
+		lines
+	}
+
+	/// Save the statistics to a formatted text file in the backup root directory
+	pub fn save(&self) -> io::Result<()> {
+		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
+		let mut file = File::create(&stats_path)?;
+
+		for line in self.format_summary() {
+			writeln!(file, "{}", line)?;
+		}
+
+		eprintln!("\nBackup Statistics saved to: {}", stats_path.display());
 
 		Ok(())
 	}
@@ -453,15 +470,6 @@ impl BackupStats {
 		lines
 	}
 
-	/// Write pipeline performance statistics to file
-	fn write_pipeline_stats(&self, file: &mut File, elapsed: Duration) -> io::Result<()> {
-		let lines = self.format_pipeline_stats(elapsed);
-		for line in lines {
-			writeln!(file, "{}", line)?;
-		}
-		Ok(())
-	}
-
 	/// Format a single time stat with progress bar
 	fn format_time_stat(label: &str, nanos: u64, total_nanos: u64) -> String {
 		let seconds = nanos as f64 / 1_000_000_000.0;
@@ -565,89 +573,87 @@ impl BackupStats {
 
 	/// Print a summary of the statistics to console
 	pub fn print_summary(&self) {
-		let elapsed = self.elapsed();
-		let end_timestamp = Utc::now();
-
-		// Load all values
-		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
-		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
-		let files_total = files_hardlinked + files_copied;
-
-		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
-		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
-		let bytes_total = bytes_hardlinked + bytes_copied;
-
-		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
-		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
-		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
-		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
-
-		println!("\nBackup Summary");
-		println!("==============");
-		println!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION"));
-		println!("Time format: HH:MM:SS.mmm");
-		println!("Sizes: bytes (with human-readable shown)");
-		println!();
-		println!("Session ID: {}", self.inner.session_id);
-		println!();
-		println!("Time:");
-		println!(
-			"  Started:  {}",
-			self.inner
-				.start_timestamp
-				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
-		);
-		println!(
-			"  Finished: {}",
-			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
-		);
-		println!("  Duration: {}", Self::format_duration(elapsed));
-		println!();
-		println!("Backup Set Stats:");
-		println!(
-			"  Hardlinked: {} files, {}",
-			files_hardlinked,
-			ByteSize(bytes_hardlinked)
-		);
-		println!(
-			"  Copied:     {} files, {}",
-			files_copied,
-			ByteSize(bytes_copied)
-		);
-		println!(
-			"  Total:      {} files, {}",
-			files_total,
-			ByteSize(bytes_total)
-		);
-		println!();
-		println!("I/O:");
-		println!(
-			"  Source Read: {} ({})",
-			bytes_source_read,
-			ByteSize(bytes_source_read)
-		);
-		println!(
-			"  Target Read: {} ({})",
-			bytes_target_read,
-			ByteSize(bytes_target_read)
-		);
-		println!(
-			"  Target Written: {} ({})",
-			bytes_target_written,
-			ByteSize(bytes_target_written)
-		);
-		println!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
-
-		// Print pipeline stats
-		self.print_pipeline_stats();
+		eprintln!();
+		for line in self.format_summary() {
+			eprintln!("{}", line);
+		}
 	}
 
-	/// Print pipeline performance statistics
-	fn print_pipeline_stats(&self) {
-		let lines = self.format_pipeline_stats(self.elapsed());
-		for line in lines {
-			println!("{}", line);
+	/// Update the progress display on stderr (overwrites same line)
+	pub fn update_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
 		}
+
+		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
+			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let processed_gb = processed as f64 / 1_000_000_000.0;
+		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
+		let elapsed = self.elapsed();
+		let elapsed_str = Self::format_duration(elapsed);
+
+		if self.inner.total_bytes > 0 && processed > 0 {
+			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+
+			// Calculate rate and format with appropriate units
+			let elapsed_secs = elapsed.as_secs_f64();
+			let rate = processed as f64 / elapsed_secs; // bytes per second
+			let rate_str = if rate >= 1_000_000_000.0 {
+				format!("{:.2}GB/s", rate / 1_000_000_000.0)
+			} else if rate >= 1_000_000.0 {
+				format!("{:.2}MB/s", rate / 1_000_000.0)
+			} else if rate >= 1_000.0 {
+				format!("{:.2}KB/s", rate / 1_000.0)
+			} else {
+				format!("{:.0}B/s", rate)
+			};
+
+			// Calculate remaining time and ETA
+			let remaining_bytes = self.inner.total_bytes - processed;
+			let remaining_secs = remaining_bytes as f64 / rate;
+			let remaining = Duration::from_secs_f64(remaining_secs);
+			let remaining_str = Self::format_duration(remaining);
+
+			// Calculate ETA timestamp in local time
+			let eta_timestamp =
+				chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
+			let eta_str = eta_timestamp.format("%H:%M:%S").to_string();
+
+			eprint!(
+				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) @ {} | Time: elapsed {}, remaining {}, ETA {}",
+				processed_gb, total_gb, percentage, rate_str, elapsed_str, remaining_str, eta_str
+			);
+		} else if self.inner.total_bytes > 0 {
+			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+			eprint!(
+				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) | Time: {}",
+				processed_gb, total_gb, percentage, elapsed_str
+			);
+		} else {
+			eprint!(
+				"\rProgress: {:.2}GB processed - {}",
+				processed_gb, elapsed_str
+			);
+		}
+	}
+
+	/// Clear the progress display line before printing a log message
+	pub fn clear_progress_line(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		// ANSI escape code to clear current line, then carriage return
+		eprint!("\x1b[2K\r");
+	}
+
+	/// Clear the progress display (move to next line on stderr)
+	pub fn clear_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		eprintln!();
 	}
 }
 
@@ -660,7 +666,12 @@ mod tests {
 	#[test]
 	fn test_backup_stats_creation() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 0);
 		assert_eq!(stats.inner.files_copied.load(Ordering::Relaxed), 0);
@@ -675,7 +686,12 @@ mod tests {
 	#[test]
 	fn test_adding_file_statistics() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		// Add some I/O operations
 		stats.add_source_read(1024 * 1024); // Read 1 MB from source
@@ -714,7 +730,12 @@ mod tests {
 	#[test]
 	fn test_thread_safety() {
 		let temp_dir = tempdir().unwrap();
-		let stats = BackupStats::new(temp_dir.path(), "test-session-id");
+		let stats = BackupStats::new(
+			temp_dir.path(),
+			"test-session-id",
+			0,
+			Duration::from_secs(0),
+		);
 
 		let threads: Vec<_> = (0..10)
 			.map(|_| {
@@ -747,7 +768,12 @@ mod tests {
 		let temp_dir = tempdir().unwrap();
 		let backup_path = temp_dir.path().join("backup");
 		std::fs::create_dir(&backup_path).unwrap();
-		let stats = BackupStats::new(&backup_path, "dhb-set-20250929-131320");
+		let stats = BackupStats::new(
+			&backup_path,
+			"dhb-set-20250929-131320",
+			0,
+			Duration::from_secs(0),
+		);
 
 		// Add some data
 		stats.add_source_read(7 * 1024 * 1024 * 1024); // 7 GB read
