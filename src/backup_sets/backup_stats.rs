@@ -589,15 +589,16 @@ impl BackupStats {
 			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
 		let processed_gb = processed as f64 / 1_000_000_000.0;
 		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
+		let elapsed = Self::format_duration(self.elapsed());
 
 		if self.inner.total_bytes > 0 {
 			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
 			eprint!(
-				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%)",
-				processed_gb, total_gb, percentage
+				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) | Time: {}",
+				processed_gb, total_gb, percentage, elapsed
 			);
 		} else {
-			eprint!("\rProgress: {:.2}GB processed", processed_gb);
+			eprint!("\rProgress: {:.2}GB processed - {}", processed_gb, elapsed);
 		}
 	}
 
