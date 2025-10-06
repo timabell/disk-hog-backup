@@ -589,16 +589,47 @@ impl BackupStats {
 			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
 		let processed_gb = processed as f64 / 1_000_000_000.0;
 		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
-		let elapsed = Self::format_duration(self.elapsed());
+		let elapsed = self.elapsed();
+		let elapsed_str = Self::format_duration(elapsed);
 
-		if self.inner.total_bytes > 0 {
+		if self.inner.total_bytes > 0 && processed > 0 {
+			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+
+			// Calculate rate and format with appropriate units
+			let elapsed_secs = elapsed.as_secs_f64();
+			let rate = processed as f64 / elapsed_secs; // bytes per second
+			let rate_str = if rate >= 1_000_000_000.0 {
+				format!("{:.2}GB/s", rate / 1_000_000_000.0)
+			} else if rate >= 1_000_000.0 {
+				format!("{:.2}MB/s", rate / 1_000_000.0)
+			} else if rate >= 1_000.0 {
+				format!("{:.2}KB/s", rate / 1_000.0)
+			} else {
+				format!("{:.0}B/s", rate)
+			};
+
+			// Calculate remaining time and ETA
+			let remaining_bytes = self.inner.total_bytes - processed;
+			let remaining_secs = remaining_bytes as f64 / rate;
+			let remaining = Duration::from_secs_f64(remaining_secs);
+			let remaining_str = Self::format_duration(remaining);
+
+			// Calculate ETA timestamp in local time
+			let eta_timestamp = chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
+			let eta_str = eta_timestamp.format("%H:%M:%S").to_string();
+
+			eprint!(
+				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) @ {} | Time: elapsed {}, remaining {}, ETA {}",
+				processed_gb, total_gb, percentage, rate_str, elapsed_str, remaining_str, eta_str
+			);
+		} else if self.inner.total_bytes > 0 {
 			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
 			eprint!(
 				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) | Time: {}",
-				processed_gb, total_gb, percentage, elapsed
+				processed_gb, total_gb, percentage, elapsed_str
 			);
 		} else {
-			eprint!("\rProgress: {:.2}GB processed - {}", processed_gb, elapsed);
+			eprint!("\rProgress: {:.2}GB processed - {}", processed_gb, elapsed_str);
 		}
 	}
 
