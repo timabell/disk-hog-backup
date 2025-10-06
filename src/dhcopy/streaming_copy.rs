@@ -109,26 +109,29 @@ pub fn copy_file_with_streaming(
 		context.stats.add_file_copied(file_size);
 	}
 
+	// Clear progress line, print log, then update progress
+	context.stats.clear_progress_line();
 	if hardlinked {
-		println!(
+		eprintln!(
 			"  Hardlinked: {} (MD5: {})",
 			dst_path.display(),
 			format_md5_hash(src_hash)
 		);
 	} else if let Some(prev) = &previous_file {
-		println!(
+		eprintln!(
 			"  Copied: {} (MD5 changed: {} -> {})",
 			dst_path.display(),
 			format_md5_hash(prev.md5),
 			format_md5_hash(src_hash)
 		);
 	} else {
-		println!(
+		eprintln!(
 			"  Copied: {} (New, MD5: {})",
 			dst_path.display(),
 			format_md5_hash(src_hash)
 		);
 	}
+	context.stats.update_progress_display();
 
 	Ok(hardlinked)
 }

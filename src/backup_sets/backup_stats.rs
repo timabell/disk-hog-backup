@@ -1,7 +1,7 @@
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -47,6 +47,9 @@ struct BackupStatsInner {
 	hasher_queue_depth_samples: AtomicU64,
 	hasher_queue_depth_sum: AtomicU64,
 	hasher_queue_depth_max: AtomicU64,
+
+	// Terminal detection for interactive progress display
+	is_terminal: bool,
 }
 
 impl BackupStats {
@@ -85,6 +88,9 @@ impl BackupStats {
 				hasher_queue_depth_samples: AtomicU64::new(0),
 				hasher_queue_depth_sum: AtomicU64::new(0),
 				hasher_queue_depth_max: AtomicU64::new(0),
+
+				// Check if stderr is a terminal for interactive progress
+				is_terminal: std::io::stderr().is_terminal(),
 			}),
 		}
 	}
@@ -337,7 +343,7 @@ impl BackupStats {
 		// Write pipeline stats to file
 		self.write_pipeline_stats(&mut file, elapsed)?;
 
-		println!("\nBackup Statistics saved to: {}", stats_path.display());
+		eprintln!("\nBackup Statistics saved to: {}", stats_path.display());
 
 		Ok(())
 	}
@@ -582,61 +588,61 @@ impl BackupStats {
 		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
 		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
 
-		println!("\nBackup Summary");
-		println!("==============");
-		println!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION"));
-		println!("Time format: HH:MM:SS.mmm");
-		println!("Sizes: bytes (with human-readable shown)");
-		println!();
-		println!("Session ID: {}", self.inner.session_id);
-		println!();
-		println!("Time:");
-		println!(
+		eprintln!("\nBackup Summary");
+		eprintln!("==============");
+		eprintln!("Program: disk-hog-backup {}", env!("CARGO_PKG_VERSION"));
+		eprintln!("Time format: HH:MM:SS.mmm");
+		eprintln!("Sizes: bytes (with human-readable shown)");
+		eprintln!();
+		eprintln!("Session ID: {}", self.inner.session_id);
+		eprintln!();
+		eprintln!("Time:");
+		eprintln!(
 			"  Started:  {}",
 			self.inner
 				.start_timestamp
 				.format("%Y-%m-%d %H:%M:%S%.3f UTC")
 		);
-		println!(
+		eprintln!(
 			"  Finished: {}",
 			end_timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC")
 		);
-		println!("  Duration: {}", Self::format_duration(elapsed));
-		println!();
-		println!("Backup Set Stats:");
-		println!(
+		eprintln!("  Duration: {}", Self::format_duration(elapsed));
+		eprintln!();
+		eprintln!("Backup Set Stats:");
+		eprintln!(
 			"  Hardlinked: {} files, {}",
 			files_hardlinked,
 			ByteSize(bytes_hardlinked)
 		);
-		println!(
+		eprintln!(
 			"  Copied:     {} files, {}",
 			files_copied,
 			ByteSize(bytes_copied)
 		);
-		println!(
+		eprintln!(
 			"  Total:      {} files, {}",
 			files_total,
 			ByteSize(bytes_total)
 		);
-		println!();
-		println!("I/O:");
-		println!(
+		eprintln!();
+		eprintln!("I/O:");
+		eprintln!(
 			"  Source Read: {} ({})",
 			bytes_source_read,
 			ByteSize(bytes_source_read)
 		);
-		println!(
+		eprintln!(
 			"  Target Read: {} ({})",
 			bytes_target_read,
 			ByteSize(bytes_target_read)
 		);
-		println!(
+		eprintln!(
 			"  Target Written: {} ({})",
 			bytes_target_written,
 			ByteSize(bytes_target_written)
 		);
-		println!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
+		eprintln!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed));
 
 		// Print pipeline stats
 		self.print_pipeline_stats();
@@ -646,8 +652,40 @@ impl BackupStats {
 	fn print_pipeline_stats(&self) {
 		let lines = self.format_pipeline_stats(self.elapsed());
 		for line in lines {
-			println!("{}", line);
+			eprintln!("{}", line);
 		}
+	}
+
+	/// Update the progress display on stderr (overwrites same line)
+	pub fn update_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
+			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let processed_gb = processed as f64 / 1_000_000_000.0;
+
+		eprint!("\rProgress: {:.2}GB processed", processed_gb);
+	}
+
+	/// Clear the progress display line before printing a log message
+	pub fn clear_progress_line(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		// ANSI escape code to clear current line, then carriage return
+		eprint!("\x1b[2K\r");
+	}
+
+	/// Clear the progress display (move to next line on stderr)
+	pub fn clear_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		eprintln!();
 	}
 }
 

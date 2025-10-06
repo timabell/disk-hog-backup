@@ -19,7 +19,7 @@ pub fn backup_folder(
 	prev_backup: Option<&str>,
 	session_id: &str,
 ) -> io::Result<()> {
-	println!("backing up folder {} into {}", source, dest);
+	eprintln!("backing up folder {} into {}", source, dest);
 
 	// Create or initialize the backup context once at the top level
 	let dest_path = Path::new(dest);
@@ -44,14 +44,18 @@ pub fn backup_folder(
 
 	// Output summary of ignored paths
 	if !ignored_paths.is_empty() {
-		println!("\nIgnored paths summary:");
+		context.stats.clear_progress_line();
+		eprintln!("\nIgnored paths summary:");
 		let mut sorted_paths: Vec<_> = ignored_paths.iter().collect();
 		sorted_paths.sort();
 		for path in sorted_paths {
-			println!("  {}", path);
+			eprintln!("  {}", path);
 		}
-		println!("Total ignored paths: {}", ignored_paths.len());
+		eprintln!("Total ignored paths: {}", ignored_paths.len());
 	}
+
+	// Clear the progress display before showing final summary
+	context.stats.clear_progress_display();
 
 	// Save the MD5 store and backup statistics
 	context.save_md5_store()?;
@@ -108,7 +112,9 @@ fn process_directory_recursive(
 
 		// Check if this entry should be ignored
 		if ignore_manager.should_ignore(&entry_path, base_path) {
-			println!("Ignoring: {}", entry_path.display());
+			context.stats.clear_progress_line();
+			eprintln!("Ignoring: {}", entry_path.display());
+			context.stats.update_progress_display();
 			ignored_paths.insert(entry_path.display().to_string());
 			continue;
 		}
@@ -134,11 +140,13 @@ fn process_directory_recursive(
 				|| file_type.is_block_device()
 				|| file_type.is_char_device()
 			{
-				println!(
+				context.stats.clear_progress_line();
+				eprintln!(
 					"Skipping special file: {} (type: {:?})",
 					entry_path.display(),
 					file_type
 				);
+				context.stats.update_progress_display();
 				ignored_paths.insert(entry_path.display().to_string());
 				continue;
 			}
@@ -189,7 +197,9 @@ fn process_directory_recursive(
 			}
 
 			// Output the full path of the file being processed
-			println!("Processing: {}", entry_path.display());
+			context.stats.clear_progress_line();
+			eprintln!("Processing: {}", entry_path.display());
+			context.stats.update_progress_display();
 
 			// Copy the file with streaming
 			copy_file_with_streaming(
