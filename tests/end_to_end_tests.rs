@@ -956,3 +956,82 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 
 	Ok(())
 }
+
+#[test]
+fn test_backup_with_directory_symlink_loop() -> io::Result<()> {
+	// This test verifies that the backup doesn't infinite loop when
+	// encountering directory symlinks that create cycles
+
+	let source = create_tmp_folder("symlink_loop_source")?;
+
+	// Create a real file in the root
+	create_test_file(&source, "root_file.txt", "root content")?;
+
+	// Create a subdirectory with a file
+	let subdir = Path::new(&source).join("subdir");
+	fs::create_dir(&subdir)?;
+	create_test_file(
+		subdir.to_str().unwrap(),
+		"subdir_file.txt",
+		"subdir content",
+	)?;
+
+	// Create a symlink in subdir that points back to the parent directory
+	// This creates a cycle: source -> subdir -> link_to_parent -> source
+	let symlink_to_parent = subdir.join("link_to_parent");
+	std::os::unix::fs::symlink(&source, &symlink_to_parent)?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("symlink_loop_backups")?;
+
+	// Run backup command - should complete without infinite loop
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the backup set directory
+	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
+	let backup_set = &backup_sets[0];
+
+	// Verify the real files were backed up
+	let backed_up_root_file = backup_set.path().join("root_file.txt");
+	assert!(
+		backed_up_root_file.exists(),
+		"Root file should be backed up"
+	);
+	assert_eq!(
+		fs::read_to_string(&backed_up_root_file)?,
+		"root content",
+		"Root file content should match"
+	);
+
+	let backed_up_subdir_file = backup_set.path().join("subdir/subdir_file.txt");
+	assert!(
+		backed_up_subdir_file.exists(),
+		"Subdir file should be backed up"
+	);
+	assert_eq!(
+		fs::read_to_string(&backed_up_subdir_file)?,
+		"subdir content",
+		"Subdir file content should match"
+	);
+
+	// Verify the symlink was created as a symlink (not followed)
+	let backed_up_symlink = backup_set.path().join("subdir/link_to_parent");
+	assert!(backed_up_symlink.exists(), "Symlink should exist in backup");
+	assert!(
+		backed_up_symlink.is_symlink(),
+		"Should be a symlink, not a directory"
+	);
+
+	println!("✓ Directory symlink loop test passed!");
+	println!("  Symlink was preserved, not followed");
+	println!("  No infinite loop occurred");
+
+	Ok(())
+}
