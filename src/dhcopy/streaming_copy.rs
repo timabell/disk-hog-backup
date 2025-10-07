@@ -98,7 +98,7 @@ pub fn copy_file_with_streaming(
 	let src_metadata = src_path.metadata()?;
 	let file_size = src_metadata.len();
 
-	let previous_file = get_matching_previous_file(prev_path, &src_metadata, rel_path, context)?;
+	let previous_file = get_matching_previous_file(prev_path, rel_path, context)?;
 
 	let (hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
 		src_path,
@@ -143,10 +143,9 @@ pub fn copy_file_with_streaming(
 	Ok(hardlinked)
 }
 
-// get a path & hash for the same file in the previous backup if available and file hasn't changed in size
+// get a path & hash for the same file in the previous backup if available
 fn get_matching_previous_file<'a>(
 	prev_path: Option<&'a Path>,
-	src_metadata: &std::fs::Metadata,
 	rel_path: &Path,
 	context: &BackupContext,
 ) -> io::Result<Option<PreviousFile<'a>>> {
@@ -154,11 +153,6 @@ fn get_matching_previous_file<'a>(
 		return Ok(None);
 	};
 	if !prev.exists() || prev.is_dir() {
-		return Ok(None);
-	}
-
-	let prev_metadata = prev.metadata()?;
-	if src_metadata.len() != prev_metadata.len() {
 		return Ok(None);
 	}
 
@@ -173,6 +167,32 @@ fn get_matching_previous_file<'a>(
 		path: prev,
 		md5: *prev_hash,
 	}))
+}
+
+// Check if modification times match
+fn files_match_by_mtime(
+	src_metadata: &std::fs::Metadata,
+	prev_metadata: &std::fs::Metadata,
+) -> bool {
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::MetadataExt;
+		let src_mtime = src_metadata.mtime();
+		let src_mtime_nsec = src_metadata.mtime_nsec();
+		let prev_mtime = prev_metadata.mtime();
+		let prev_mtime_nsec = prev_metadata.mtime_nsec();
+
+		src_mtime == prev_mtime && src_mtime_nsec == prev_mtime_nsec
+	}
+
+	#[cfg(windows)]
+	{
+		use std::os::windows::fs::MetadataExt;
+		let src_mtime = src_metadata.last_write_time();
+		let prev_mtime = prev_metadata.last_write_time();
+
+		src_mtime == prev_mtime
+	}
 }
 
 // Helper function to copy file metadata (timestamps, permissions)
@@ -226,6 +246,20 @@ fn format_md5_hash(hash: [u8; 16]) -> String {
 	})
 }
 
+// Helper function to create a hardlink (or copy on non-Unix platforms)
+fn create_hardlink(src: &Path, dst: &Path) -> io::Result<()> {
+	#[cfg(unix)]
+	{
+		fs::hard_link(src, dst)
+	}
+
+	#[cfg(not(unix))]
+	{
+		fs::copy(src, dst)?;
+		Ok(())
+	}
+}
+
 // Unified streaming pipeline that reads the file once, computes MD5, and potentially copies
 // Returns (hardlinked, src_hash)
 fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [u8; 16])> {
@@ -236,7 +270,47 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 		stats,
 	} = args;
 	let prev_path = previous_file.map(|p| p.path);
-	let expected_md5 = previous_file.map(|p| p.md5);
+
+	// Track whether size or mtime changed - if so, don't compare MD5 (size) or update mtime (mtime)
+	let mut size_changed = false;
+	let mut mtime_changed = false;
+
+	// See: https://github.com/timabell/disk-hog-backup/issues/58
+	// Optimization: If mtime and size match, trust that file is unchanged and skip MD5
+	if let Some(prev) = previous_file
+		&& let Some(prev_p) = prev_path
+	{
+		let src_metadata = src_path.metadata()?;
+		let prev_metadata = prev_p.metadata()?;
+
+		// Check if size matches
+		if src_metadata.len() == prev_metadata.len() {
+			// Size matches, check mtime
+			if files_match_by_mtime(&src_metadata, &prev_metadata) {
+				// Trust the timestamp - skip MD5 check and hardlink immediately
+				create_hardlink(prev_p, dst_path)?;
+				return Ok((true, prev.md5));
+			} else {
+				// mtime changed, need to check hash
+				stats.add_file_mtime_changed();
+				mtime_changed = true;
+			}
+		} else {
+			// Size changed - don't compare MD5
+			stats.add_file_size_changed();
+			size_changed = true;
+		}
+	} else if previous_file.is_none() {
+		// New file - no previous backup
+		stats.add_file_new();
+	}
+
+	// Only set expected_md5 if size didn't change
+	let expected_md5 = if !size_changed {
+		previous_file.map(|p| p.md5)
+	} else {
+		None
+	};
 
 	// Create bounded channels
 	// Use Arc to share chunks between writer and hasher without cloning data
@@ -299,6 +373,9 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 	if files_match {
 		// Signal writer to cancel remaining buffered writes
 		cancel_write.store(true, Ordering::SeqCst);
+	} else if expected_md5.is_some() {
+		// Had a previous file but hash changed (and size was same)
+		stats.add_file_hash_changed();
 	}
 
 	// Wait for writer to finish
@@ -308,26 +385,17 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 
 	// If files match, create a hardlink instead of keeping the written copy
 	if files_match && let Some(prev) = prev_path {
-		#[cfg(unix)]
-		{
-			// Remove the destination file that was created
-			if dst_path.exists() {
-				fs::remove_file(dst_path)?;
-			}
-			// Create a hardlink instead
-			fs::hard_link(prev, dst_path)?;
-			return Ok((true, src_hash));
+		// Remove the destination file that was created
+		if dst_path.exists() {
+			fs::remove_file(dst_path)?;
 		}
-
-		#[cfg(not(unix))]
-		{
-			// On non-Unix platforms, fall back to copying
-			if dst_path.exists() {
-				fs::remove_file(dst_path)?;
-			}
-			fs::copy(prev, dst_path)?;
-			return Ok((true, src_hash));
+		// Create a hardlink instead
+		create_hardlink(prev, dst_path)?;
+		// If mtime changed, update the metadata on the hardlinked file
+		if mtime_changed {
+			copy_file_metadata(src_path, dst_path)?;
 		}
+		return Ok((true, src_hash));
 	}
 
 	Ok((false, src_hash))

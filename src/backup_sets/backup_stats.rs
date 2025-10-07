@@ -22,6 +22,10 @@ struct BackupStatsInner {
 	files_copied: AtomicUsize,
 	bytes_hardlinked: AtomicU64,
 	bytes_copied: AtomicU64,
+	files_new: AtomicUsize,           // new file, no previous backup
+	files_size_changed: AtomicUsize,  // size changed, no previous file to compare
+	files_mtime_changed: AtomicUsize, // mtime changed, had to check hash
+	files_hash_changed: AtomicUsize,  // hash changed, had to copy
 	bytes_source_read: AtomicU64,
 	bytes_target_read: AtomicU64,
 	bytes_target_written: AtomicU64,
@@ -74,6 +78,10 @@ impl BackupStats {
 				files_copied: AtomicUsize::new(0),
 				bytes_hardlinked: AtomicU64::new(0),
 				bytes_copied: AtomicU64::new(0),
+				files_new: AtomicUsize::new(0),
+				files_size_changed: AtomicUsize::new(0),
+				files_mtime_changed: AtomicUsize::new(0),
+				files_hash_changed: AtomicUsize::new(0),
 				bytes_source_read: AtomicU64::new(0),
 				bytes_target_read: AtomicU64::new(0),
 				bytes_target_written: AtomicU64::new(0),
@@ -150,6 +158,31 @@ impl BackupStats {
 		self.inner
 			.bytes_copied
 			.fetch_add(file_size, Ordering::Relaxed);
+	}
+
+	/// Record that size changed
+	pub fn add_file_new(&self) {
+		self.inner.files_new.fetch_add(1, Ordering::Relaxed);
+	}
+
+	pub fn add_file_size_changed(&self) {
+		self.inner
+			.files_size_changed
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Record that mtime changed
+	pub fn add_file_mtime_changed(&self) {
+		self.inner
+			.files_mtime_changed
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Record that hash changed
+	pub fn add_file_hash_changed(&self) {
+		self.inner
+			.files_hash_changed
+			.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Get the current elapsed time since backup started
@@ -277,6 +310,11 @@ impl BackupStats {
 		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
 		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
 
+		let files_new = self.inner.files_new.load(Ordering::Relaxed);
+		let files_size_changed = self.inner.files_size_changed.load(Ordering::Relaxed);
+		let files_mtime_changed = self.inner.files_mtime_changed.load(Ordering::Relaxed);
+		let files_hash_changed = self.inner.files_hash_changed.load(Ordering::Relaxed);
+
 		let mut lines = vec![
 			"Backup Summary".to_string(),
 			"==============".to_string(),
@@ -304,18 +342,22 @@ impl BackupStats {
 			format!("  Duration: {}", Self::format_duration(elapsed)),
 			String::new(),
 			"Backup Set Stats:".to_string(),
+			format!("  New:              {}", files_new),
+			format!("  Size changed:     {}", files_size_changed),
+			format!("  Mtime changed:    {}", files_mtime_changed),
+			format!("  Content changed:  {}", files_hash_changed),
 			format!(
-				"  Hardlinked: {} files, {}",
+				"  Hardlinked:       {} files, {}",
 				files_hardlinked,
 				ByteSize(bytes_hardlinked)
 			),
 			format!(
-				"  Copied:     {} files, {}",
+				"  Copied:           {} files, {}",
 				files_copied,
 				ByteSize(bytes_copied)
 			),
 			format!(
-				"  Total:      {} files, {}",
+				"  Total:            {} files, {}",
 				files_total,
 				ByteSize(bytes_total)
 			),
@@ -421,9 +463,27 @@ impl BackupStats {
 			Self::format_time_stat("  Blocked (recv)", writer_recv_nanos, total_elapsed_nanos),
 			Self::format_time_stat("  I/O", writer_io_nanos, total_elapsed_nanos),
 			String::new(),
-			// Queue stats
-			"Queue Stats:".to_string(),
 		];
+
+		// Bottleneck analysis after threads
+		let analysis = Self::format_bottleneck_analysis(
+			reader_io_nanos,
+			reader_send_writer_nanos + reader_send_hasher_nanos,
+			hasher_recv_nanos,
+			hasher_hash_nanos,
+			writer_recv_nanos,
+			writer_io_nanos,
+			memory_throttle_nanos,
+			writer_queue_samples,
+			writer_queue_sum,
+			hasher_queue_samples,
+			hasher_queue_sum,
+		);
+		lines.extend(analysis);
+		lines.push(String::new());
+
+		// Queue stats
+		lines.push("Queue Stats:".to_string());
 		if writer_queue_samples > 0 {
 			let writer_avg = writer_queue_sum as f64 / writer_queue_samples as f64;
 			lines.push(format!(
@@ -450,22 +510,6 @@ impl BackupStats {
 			lines.push(format!("  Throttle events: {}", memory_throttle_count));
 			lines.push(String::new());
 		}
-
-		// Bottleneck analysis
-		let analysis = Self::format_bottleneck_analysis(
-			reader_io_nanos,
-			reader_send_writer_nanos + reader_send_hasher_nanos,
-			hasher_recv_nanos,
-			hasher_hash_nanos,
-			writer_recv_nanos,
-			writer_io_nanos,
-			memory_throttle_nanos,
-			writer_queue_samples,
-			writer_queue_sum,
-			hasher_queue_samples,
-			hasher_queue_sum,
-		);
-		lines.extend(analysis);
 
 		lines
 	}
@@ -529,43 +573,45 @@ impl BackupStats {
 			0.0
 		};
 
-		let mut lines = vec!["Bottleneck Analysis:".to_string()];
+		let mut lines = vec!["Pipeline:".to_string()];
 
 		if memory_throttle_pct > 10.0 {
 			lines.push(format!(
-				"  → MEMORY BOTTLENECK: Reader throttled {:.1}% of time",
+				"  Reader throttled {:.1}% of time",
 				memory_throttle_pct
 			));
-			lines.push("     Increase GLOBAL_MAX_BUFFER or reduce concurrency".to_string());
+			lines
+				.push("  Assessment: Increase GLOBAL_MAX_BUFFER or reduce concurrency".to_string());
 		} else if writer_io_pct > 50.0 && writer_avg > 25.0 {
 			lines.push(format!(
-				"  → WRITE I/O BOTTLENECK: Writer busy {:.1}%, queue {:.1}/32 full",
+				"  Writer busy {:.1}%, queue {:.1}/32 full",
 				writer_io_pct, writer_avg
 			));
-			lines.push("     Destination disk is slow. Consider faster disk.".to_string());
+			lines.push("  Assessment: Destination disk is slow. Consider faster disk.".to_string());
 		} else if reader_io_pct > 60.0 && (writer_avg < 5.0 || hasher_avg < 5.0) {
 			lines.push(format!(
-				"  → READ I/O BOTTLENECK: Reader busy {:.1}%, queues near empty",
+				"  Reader busy {:.1}%, queues near empty",
 				reader_io_pct
 			));
 			lines.push(
-				"     Source disk is slow. Consider caching or different filesystem.".to_string(),
+				"  Assessment: Source disk is slow. Consider caching or different filesystem."
+					.to_string(),
 			);
 		} else if hasher_hash_pct > 50.0 && hasher_avg < 5.0 {
 			lines.push(format!(
-				"  → CPU/HASH BOTTLENECK: Hasher busy {:.1}%, queue near empty",
+				"  Hasher busy {:.1}%, queue near empty",
 				hasher_hash_pct
 			));
 			lines.push(
-				"     MD5 computation is slow. Consider faster hash or hardware acceleration."
+				"  Assessment: MD5 computation is slow. Consider faster hash or hardware acceleration."
 					.to_string(),
 			);
 		} else {
-			lines.push("  → BALANCED: Pipeline appears well-tuned".to_string());
 			lines.push(format!(
-				"     Reader I/O: {:.1}%, Hasher: {:.1}%, Writer I/O: {:.1}%",
+				"  Reader I/O: {:.1}%, Hasher: {:.1}%, Writer I/O: {:.1}%",
 				reader_io_pct, hasher_hash_pct, writer_io_pct
 			));
+			lines.push("  Assessment: Pipeline appears well-tuned".to_string());
 		}
 
 		lines
@@ -800,9 +846,9 @@ mod tests {
 		assert!(contents.contains("I/O:"));
 
 		// Verify data is present
-		assert!(contents.contains("Hardlinked: 1 files"));
-		assert!(contents.contains("Copied:     1 files"));
-		assert!(contents.contains("Total:      2 files"));
+		assert!(contents.contains("Hardlinked:       1 files"));
+		assert!(contents.contains("Copied:           1 files"));
+		assert!(contents.contains("Total:            2 files"));
 	}
 
 	#[test]

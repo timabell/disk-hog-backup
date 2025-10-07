@@ -819,19 +819,16 @@ pub fn create_test_file(base_folder: &str, path: &str, contents: &str) -> io::Re
 
 #[test]
 fn test_backup_stats_functionality() -> io::Result<()> {
-	// Set up source directory with multiple test files of different sizes
-	let source = create_tmp_folder("stats_source")?;
+	use regex::Regex;
 
-	// Create different types of files to test stats
-	create_test_file(&source, "small.txt", "Small file content")?; // ~18 bytes
-	create_test_file(&source, "medium.txt", &"x".repeat(1024))?; // 1KB
-	create_test_file(&source, "large.txt", &"y".repeat(10 * 1024))?; // 10KB
-	create_test_file(&source, "nested/deep.txt", "Nested file")?; // ~11 bytes
+	// Set up source directory with a simple test file
+	let source = create_tmp_folder("stats_source")?;
+	create_test_file(&source, "test.txt", "test content")?;
 
 	// Create backup destination
 	let backup_root = create_tmp_folder("stats_backups")?;
 
-	// Run first backup
+	// Run backup
 	disk_hog_backup_cmd()
 		.arg("--source")
 		.arg(&source)
@@ -840,119 +837,123 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		.assert()
 		.success();
 
-	// Get the backup set directory (should be only one)
+	// Get the backup set directory
 	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
-	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
-
 	let backup_set_path = backup_sets[0].path();
-
-	// Verify that the stats file was created
 	let stats_file = backup_set_path.join("disk-hog-backup-stats.txt");
-	assert!(
-		stats_file.exists(),
-		"Stats file should exist: {}",
-		stats_file.display()
-	);
-
-	// Read the stats file
 	let stats_content = fs::read_to_string(&stats_file)?;
 
-	// Verify the new format contains expected sections
-	assert!(
-		stats_content.contains("Backup Summary"),
-		"Should have Backup Summary header"
-	);
-	assert!(
-		stats_content.contains("Session ID:"),
-		"Should have Session ID"
-	);
-	assert!(stats_content.contains("Time:"), "Should have Time section");
-	assert!(
-		stats_content.contains("Backup Set Stats:"),
-		"Should have Backup Set Stats section"
-	);
-	assert!(stats_content.contains("I/O:"), "Should have I/O section");
-	assert!(
-		stats_content.contains("Started:"),
-		"Should have start timestamp"
-	);
-	assert!(
-		stats_content.contains("Finished:"),
-		"Should have end timestamp"
-	);
+	// Normalize timestamps and durations using regex
+	let normalized = stats_content.clone();
 
-	// Verify first backup had all files copied (no hardlinks)
-	assert!(
-		stats_content.contains("Copied:     4 files"),
-		"Should have copied 4 files in first backup"
-	);
-	assert!(
-		stats_content.contains("Hardlinked: 0 files"),
-		"Should have no hardlinked files in first backup"
-	);
-	assert!(
-		stats_content.contains("Total:      4 files"),
-		"Should have 4 total files"
-	);
+	// Normalize timestamps
+	let normalized = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} UTC")
+		.unwrap()
+		.replace_all(&normalized, "YYYY-MM-DD HH:MM:SS.mmm UTC");
 
-	// Sleep to ensure different backup set names (they're based on timestamp)
-	thread::sleep(time::Duration::from_secs(2));
+	// Normalize durations
+	let normalized = Regex::new(r"\d{2}:\d{2}:\d{2}\.\d{3}")
+		.unwrap()
+		.replace_all(&normalized, "HH:MM:SS.mmm");
 
-	// Now run a second backup to test hardlinking stats
-	disk_hog_backup_cmd()
-		.arg("--source")
-		.arg(&source)
-		.arg("--destination")
-		.arg(&backup_root)
-		.assert()
-		.success();
+	// Normalize session IDs
+	let normalized = Regex::new(r"dhb-set-\d{8}-\d{6}")
+		.unwrap()
+		.replace_all(&normalized, "dhb-set-YYYYMMDD-HHMMSS");
 
-	// Get the backup sets again
-	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
-	assert_eq!(
-		backup_sets.len(),
-		2,
-		"Should have exactly two backup sets after second backup"
-	);
+	// Normalize pipeline performance times (seconds with percentages)
+	let normalized = Regex::new(r"\d+\.\d+s \(\s*\d+\.\d+%\)")
+		.unwrap()
+		.replace_all(&normalized, "X.XXs ( XX.X%)");
 
-	// Find the newer backup set (by modification time)
-	let mut backup_set_paths: Vec<_> = backup_sets
-		.iter()
-		.map(|entry| {
-			let path = entry.path();
-			let metadata = path.metadata().unwrap();
-			(path, metadata.modified().unwrap())
+	// Normalize percentages (including 0%)
+	let normalized = Regex::new(r"\d+(?:\.\d+)?%")
+		.unwrap()
+		.replace_all(&normalized, "XX.X%");
+
+	// Normalize queue stats numbers
+	let normalized = Regex::new(r"Avg: \d+\.\d+")
+		.unwrap()
+		.replace_all(&normalized, "Avg: X.X");
+	let normalized = Regex::new(r"Peak: \d+")
+		.unwrap()
+		.replace_all(&normalized, "Peak: X");
+
+	// Strip trailing whitespace and bar chart characters from each line
+	let mut normalized = normalized
+		.lines()
+		.map(|line| {
+			// Remove bar chart characters and trailing whitespace
+			Regex::new(r"[█▓▒░\s]+$")
+				.unwrap()
+				.replace(line, "")
+				.to_string()
 		})
-		.collect();
-	backup_set_paths.sort_by_key(|(_, modified)| *modified);
-	let second_backup_path = &backup_set_paths[1].0;
+		.collect::<Vec<_>>()
+		.join("\n");
 
-	// Read stats from second backup
-	let second_stats_file = second_backup_path.join("disk-hog-backup-stats.txt");
-	assert!(
-		second_stats_file.exists(),
-		"Second backup stats file should exist"
-	);
+	// Add trailing newline to match file format
+	normalized.push('\n');
 
-	let second_stats_content = fs::read_to_string(&second_stats_file)?;
+	let expected_stats = r"Backup Summary
+==============
+Program: disk-hog-backup 0.0.0-git
+Time format: HH:MM:SS.mmm
+Sizes: bytes (with human-readable shown)
 
-	// Verify second backup had all files hardlinked (no copies)
-	assert!(
-		second_stats_content.contains("Hardlinked: 4 files"),
-		"Should have hardlinked 4 files in second backup"
-	);
-	assert!(
-		second_stats_content.contains("Copied:     0 files"),
-		"Should have no copied files in second backup"
-	);
-	assert!(
-		second_stats_content.contains("Total:      4 files"),
-		"Should still have 4 total files"
-	);
+Session ID: dhb-set-YYYYMMDD-HHMMSS
 
-	println!("✓ Stats functionality test passed!");
-	println!("  First backup: All files copied (no hardlinks)");
-	println!("  Second backup: All files hardlinked (space saved)");
+Time:
+  Started:  YYYY-MM-DD HH:MM:SS.mmm UTC
+  Size Calc: HH:MM:SS.mmm
+  Finished: YYYY-MM-DD HH:MM:SS.mmm UTC
+  Duration: HH:MM:SS.mmm
+
+Backup Set Stats:
+  New:              1
+  Size changed:     0
+  Mtime changed:    0
+  Content changed:  0
+  Hardlinked:       0 files, 0 B
+  Copied:           1 files, 12 B
+  Total:            1 files, 12 B
+
+I/O:
+  Source Read: 12 (12 B)
+  Target Read: 0 (0 B)
+  Target Written: 12 (12 B)
+  Hashing: 12 (12 B)
+
+Pipeline Performance:
+
+Reader Thread:
+  I/O                   X.XXs ( XX.X%)
+  Send->Writer          X.XXs ( XX.X%)
+  Send->Hasher          X.XXs ( XX.X%)
+  Throttle              X.XXs ( XX.X%)
+
+Hasher Thread:
+  Blocked (recv)        X.XXs ( XX.X%)
+  Hash (MD5)            X.XXs ( XX.X%)
+
+Writer Thread:
+  Blocked (recv)        X.XXs ( XX.X%)
+  I/O                   X.XXs ( XX.X%)
+
+Pipeline:
+  Reader I/O: XX.X%, Hasher: XX.X%, Writer I/O: XX.X%
+  Assessment: Pipeline appears well-tuned
+
+Queue Stats:
+  Writer Queue: Avg: X.X/32 (XX.X%) | Peak: X/32
+  Hasher Queue: Avg: X.X/32 (XX.X%) | Peak: X/32
+
+";
+
+	assert_eq!(
+		&normalized, expected_stats,
+		"Stats file should match exactly"
+	);
 
 	Ok(())
 }
@@ -1032,6 +1033,85 @@ fn test_backup_with_directory_symlink_loop() -> io::Result<()> {
 	println!("✓ Directory symlink loop test passed!");
 	println!("  Symlink was preserved, not followed");
 	println!("  No infinite loop occurred");
+
+	Ok(())
+}
+
+#[test]
+fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
+	// Set up source directory with test files
+	let source = create_tmp_folder("hardlink_opt_source")?;
+
+	create_test_file(&source, "unchanged.txt", "unchanged")?;
+	create_test_file(&source, "size_change.txt", "original")?;
+	create_test_file(&source, "mtime_change.txt", "content")?;
+	create_test_file(&source, "content_change.txt", "original")?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("hardlink_opt_backups")?;
+
+	// Run first backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	thread::sleep(time::Duration::from_secs(2));
+
+	// Modify files in different ways
+	// unchanged.txt - leave alone (should be trusted via mtime)
+	// size_change.txt - change size (should increment size_changed)
+	create_test_file(&source, "size_change.txt", "different length content")?;
+	// mtime_change.txt - touch only (should increment mtime_changed, but hardlink)
+	let mtime_path = Path::new(&source).join("mtime_change.txt");
+	let content = fs::read_to_string(&mtime_path)?;
+	fs::write(&mtime_path, content)?;
+	// content_change.txt - change content same length (should increment mtime_changed and content_changed)
+	create_test_file(&source, "content_change.txt", "MODIFIED")?;
+
+	// Run second backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get second backup stats
+	let mut backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().modified().unwrap());
+	let stats = fs::read_to_string(backup_sets[1].path().join("disk-hog-backup-stats.txt"))?;
+
+	// Verify we got one of each type
+	println!("Stats:\n{}", stats);
+	assert!(
+		stats.contains("New:              0"),
+		"Should have 0 new files (second backup)"
+	);
+	assert!(
+		stats.contains("Size changed:     1"),
+		"Should have 1 size change (size_change.txt)"
+	);
+	assert!(
+		stats.contains("Mtime changed:    2"),
+		"Should have 2 mtime changes (mtime_change.txt and content_change.txt)"
+	);
+	assert!(
+		stats.contains("Content changed:  1"),
+		"Should have 1 content change (content_change.txt)"
+	);
+	assert!(
+		stats.contains("Hardlinked:       2 files"),
+		"Should hardlink 2 files (unchanged.txt, mtime_change.txt)"
+	);
+	assert!(
+		stats.contains("Copied:           2 files"),
+		"Should copy 2 files (size_change.txt, content_change.txt)"
+	);
 
 	Ok(())
 }
