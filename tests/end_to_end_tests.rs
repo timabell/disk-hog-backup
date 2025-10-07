@@ -846,6 +846,11 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 	// Normalize timestamps and durations using regex
 	let normalized = stats_content.clone();
 
+	// Normalize version
+	let normalized = Regex::new(r"disk-hog-backup \d+\.\d+\.\d+(?:-git)?")
+		.unwrap()
+		.replace_all(&normalized, "disk-hog-backup VERSION");
+
 	// Normalize timestamps
 	let normalized = Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} UTC")
 		.unwrap()
@@ -897,7 +902,7 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 
 	let expected_stats = r"Backup Summary
 ==============
-Program: disk-hog-backup 0.0.0-git
+Program: disk-hog-backup VERSION
 Time format: HH:MM:SS.mmm
 Sizes: bytes (with human-readable shown)
 
