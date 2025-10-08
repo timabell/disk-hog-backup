@@ -1,6 +1,7 @@
 mod backup;
 mod backup_sets;
 mod dhcopy;
+mod disk_space;
 
 use crate::backup::backup;
 use clap::Parser;
