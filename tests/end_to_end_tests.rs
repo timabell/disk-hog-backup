@@ -886,9 +886,10 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 
 	// Normalize disk space numbers only in Disk Space section lines
 	// Match patterns like "123.4 GB", "45 MB", "6.7 KB", "89 B" but only in these specific contexts
-	let normalized = Regex::new(r"(\d+(?:\.\d+)?) ((?:GB|MB|KB|B)) (used|total|available|additional space)")
-		.unwrap()
-		.replace_all(&normalized, "X.X XB $3");
+	let normalized =
+		Regex::new(r"(\d+(?:\.\d+)?) ((?:GB|MB|KB|B)) (used|total|available|additional space)")
+			.unwrap()
+			.replace_all(&normalized, "X.X XB $3");
 	// Also normalize the MD5 store line which ends with just the size
 	let normalized = Regex::new(r"(MD5 store:\s+)\d+(?:\.\d+)? (?:GB|MB|KB|B)")
 		.unwrap()

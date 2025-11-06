@@ -770,10 +770,7 @@ impl BackupStats {
 						));
 					}
 					if let Some(md5_size) = info.md5_store_size {
-						lines.push(format!(
-							"  MD5 store:   {}",
-							ByteSize(md5_size)
-						));
+						lines.push(format!("  MD5 store:   {}", ByteSize(md5_size)));
 					}
 				}
 			}
