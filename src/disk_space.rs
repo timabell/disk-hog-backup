@@ -1,6 +1,6 @@
 use std::io;
 use std::path::Path;
-use sysinfo::Disks;
+use sysinfo::{Disk, Disks};
 
 /// Information about disk space
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +27,42 @@ impl DiskSpace {
 	pub fn used_difference(&self, other: &DiskSpace) -> i64 {
 		self.used as i64 - other.used as i64
 	}
+}
+
+/// Find the mount point with the longest match for the given path.
+///
+/// When multiple mount points could match a path (e.g., both / and /mnt/backup match
+/// /mnt/backup/files), we must select the longest one to get the correct disk.
+/// This ensures we check space on the actual target disk, not a parent mount.
+///
+/// # Arguments
+///
+/// * `mount_points` - Iterator of mount point paths to search
+/// * `path` - The canonical path to match against mount points
+///
+/// # Returns
+///
+/// Returns the longest matching mount point, or None if no mount point matches.
+fn find_longest_matching_mount<'a, I>(mount_points: I, path: &Path) -> Option<&'a Path>
+where
+	I: Iterator<Item = &'a Path>,
+{
+	mount_points
+		.filter(|mount| path.starts_with(mount))
+		.max_by_key(|mount| mount.as_os_str().len())
+}
+
+/// Find the disk with the longest matching mount point for the given path.
+fn find_disk_for_path<'a>(disks: impl Iterator<Item = &'a Disk>, path: &Path) -> Option<&'a Disk> {
+	let disks: Vec<_> = disks.collect();
+	let mount_points: Vec<_> = disks.iter().map(|d| d.mount_point()).collect();
+
+	find_longest_matching_mount(mount_points.iter().copied(), path)?;
+
+	disks
+		.into_iter()
+		.filter(|disk| path.starts_with(disk.mount_point()))
+		.max_by_key(|disk| disk.mount_point().as_os_str().len())
 }
 
 /// Get disk space information for a given path
@@ -58,21 +94,12 @@ pub fn get_disk_space(path: &Path) -> io::Result<DiskSpace> {
 	// Canonicalize the path to resolve symlinks and make it absolute
 	let canonical_path = path.canonicalize()?;
 
-	// Find the disk with the longest matching mount point
-	// This handles nested mounts correctly (e.g., /, /home, /home/user/external)
-	let disk = disks
-		.iter()
-		.filter(|disk| canonical_path.starts_with(disk.mount_point()))
-		.max_by_key(|disk| {
-			// Use the length of the mount point to find the longest match
-			disk.mount_point().as_os_str().len()
-		})
-		.ok_or_else(|| {
-			io::Error::new(
-				io::ErrorKind::NotFound,
-				format!("No disk found for path: {:?}", path),
-			)
-		})?;
+	let disk = find_disk_for_path(disks.iter(), &canonical_path).ok_or_else(|| {
+		io::Error::new(
+			io::ErrorKind::NotFound,
+			format!("No disk found for path: {:?}", path),
+		)
+	})?;
 
 	Ok(DiskSpace::new(disk.total_space(), disk.available_space()))
 }
@@ -121,6 +148,41 @@ mod tests {
 		assert_eq!(space.total, 1000);
 		assert_eq!(space.available, 600);
 		assert_eq!(space.used, 400);
+	}
+
+	#[test]
+	fn test_find_longest_matching_mount() {
+		// Simulate typical backup scenario: root disk and external USB drive
+		let mounts = [Path::new("/"), Path::new("/media/backup-drive")];
+
+		// Backup to external drive should match the external mount
+		let result = find_longest_matching_mount(
+			mounts.iter().copied(),
+			Path::new("/media/backup-drive/backups/2024-01-15"),
+		);
+		assert_eq!(result, Some(Path::new("/media/backup-drive")));
+
+		// Backup to home directory should match root
+		let result =
+			find_longest_matching_mount(mounts.iter().copied(), Path::new("/home/user/backups"));
+		assert_eq!(result, Some(Path::new("/")));
+
+		// Multiple nested external mounts
+		let nested_mounts = [
+			Path::new("/"),
+			Path::new("/mnt"),
+			Path::new("/mnt/external-hdd"),
+		];
+		let result = find_longest_matching_mount(
+			nested_mounts.iter().copied(),
+			Path::new("/mnt/external-hdd/backups/photos"),
+		);
+		assert_eq!(result, Some(Path::new("/mnt/external-hdd")));
+
+		// Empty mounts
+		let empty: Vec<&Path> = vec![];
+		let result = find_longest_matching_mount(empty.iter().copied(), Path::new("/home/backups"));
+		assert_eq!(result, None);
 	}
 
 	#[test]
