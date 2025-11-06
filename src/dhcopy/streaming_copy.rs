@@ -138,21 +138,15 @@ pub fn copy_file_with_streaming(
 			// List backup sets and select one to delete using weighted random
 			let sets = set_manager::list_backup_sets(backup_root_path)?;
 			let mut rng = rand::rng();
-			let to_delete = set_manager::select_sets_to_delete(&sets, 0, available, &mut rng, 2.0);
+			let to_delete = set_manager::select_set_to_delete(&sets, &mut rng, 2.0);
 
 			// Delete the selected set
-			for set in &to_delete {
+			if let Some(set) = to_delete {
 				eprintln!("Deleting backup set: {}", set.name);
 				set_manager::delete_backup_set(&set.path)?;
-			}
-
-			if to_delete.is_empty() {
-				eprintln!("Warning: Could not delete any backup sets (preserving last backup)");
+				eprintln!("Deleted backup set, resuming copy...");
 			} else {
-				eprintln!(
-					"Deleted {} backup set(s), resuming copy...",
-					to_delete.len()
-				);
+				eprintln!("Warning: Could not delete any backup sets (preserving last backup)");
 			}
 
 			context.stats.update_progress_display();

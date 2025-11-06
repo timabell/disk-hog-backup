@@ -59,22 +59,20 @@ pub fn calculate_deletion_weight(time_span_days: f64, exponent: f64) -> f64 {
 	(1.0 / time_span_days).powf(exponent)
 }
 
-/// Select backup sets to delete using weighted random distribution
-/// Returns a list of sets to delete that will free enough space
-/// Always preserves at least one backup set
-pub fn select_sets_to_delete<R: rand::Rng>(
+/// Select one backup set to delete using weighted random distribution
+/// Returns the selected set, or None if no sets can be deleted
+/// Always preserves at least one backup set (the most recent)
+pub fn select_set_to_delete<R: rand::Rng>(
 	sets: &[BackupSetInfo],
-	space_needed: u64,
-	_space_available: u64,
 	rng: &mut R,
 	exponent: f64,
-) -> Vec<BackupSetInfo> {
+) -> Option<BackupSetInfo> {
 	// Must preserve at least 1 set for hard-linking
 	if sets.len() <= 1 {
-		return vec![];
+		return None;
 	}
 
-	// Calculate time spans between consecutive backups
+	// Calculate time spans and weights for each backup
 	let mut weights = Vec::new();
 	for i in 0..sets.len() {
 		let time_span_days = if i == 0 {
@@ -100,55 +98,34 @@ pub fn select_sets_to_delete<R: rand::Rng>(
 
 	// Create a pool of deletable sets (all except the last one)
 	// We preserve the most recent backup for hard-linking
-	let deletable: Vec<(usize, &BackupSetInfo, f64)> = sets[..sets.len() - 1]
+	let deletable: Vec<(&BackupSetInfo, f64)> = sets[..sets.len() - 1]
 		.iter()
-		.enumerate()
 		.zip(weights.iter())
-		.map(|((idx, set), &weight)| (idx, set, weight))
+		.map(|(set, &weight)| (set, weight))
 		.collect();
 
-	let mut to_delete = Vec::new();
+	// Calculate total weight
+	let total_weight: f64 = deletable.iter().map(|(_, w)| w).sum();
 
-	// If space_needed is 0, just pick one set. Otherwise, keep deleting until we have enough
-	let target_deletions = if space_needed == 0 { 1 } else { usize::MAX };
-	let mut space_freed = 0u64;
-	let mut remaining_deletable = deletable;
-
-	// Select sets weighted by deletion probability
-	// When space_needed is 0, just rely on target_deletions
-	while to_delete.len() < target_deletions
-		&& (space_needed == 0 || space_freed < space_needed)
-		&& !remaining_deletable.is_empty()
-	{
-		// Calculate total weight
-		let total_weight: f64 = remaining_deletable.iter().map(|(_, _, w)| w).sum();
-
-		if total_weight <= 0.0 {
-			// No valid weights, can't proceed
-			break;
-		}
-
-		// Select a random value in [0, total_weight)
-		let random_value: f64 = rng.random_range(0.0..total_weight);
-
-		// Find which set this corresponds to
-		let mut cumulative = 0.0;
-		let mut selected_idx = 0;
-		for (i, (_, _, weight)) in remaining_deletable.iter().enumerate() {
-			cumulative += weight;
-			if random_value < cumulative {
-				selected_idx = i;
-				break;
-			}
-		}
-
-		// Remove the selected set from remaining_deletable and add to deletion list
-		let (_, set, _) = remaining_deletable.remove(selected_idx);
-		space_freed += set.size;
-		to_delete.push(set.clone());
+	if total_weight <= 0.0 {
+		// No valid weights
+		return None;
 	}
 
-	to_delete
+	// Select a random value in [0, total_weight)
+	let random_value: f64 = rng.random_range(0.0..total_weight);
+
+	// Find which set this corresponds to
+	let mut cumulative = 0.0;
+	for (set, weight) in &deletable {
+		cumulative += weight;
+		if random_value < cumulative {
+			return Some((*set).clone());
+		}
+	}
+
+	// Fallback: return the last deletable set (shouldn't normally reach here)
+	deletable.last().map(|(set, _)| (*set).clone())
 }
 
 /// Delete a backup set atomically (remove the entire directory)
@@ -213,10 +190,10 @@ mod tests {
 		}];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_sets_to_delete(&sets, 10000, 1000, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0);
 
 		// Never delete the last (only) set
-		assert_eq!(result.len(), 0);
+		assert!(result.is_none());
 	}
 
 	#[test]
@@ -243,14 +220,14 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_sets_to_delete(&sets, 2500, 1000, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0);
 
-		// Should delete enough to free 2500 bytes
-		let freed: u64 = result.iter().map(|s| s.size).sum();
-		assert!(freed >= 2500);
+		// Should select exactly one set
+		assert!(result.is_some());
+		let selected = result.unwrap();
 
-		// Should preserve at least 1 set (the most recent one)
-		assert!(result.len() < sets.len());
+		// Should not be the most recent
+		assert_ne!(selected.name, "dhb-set-20240103-000000");
 	}
 
 	#[test]
@@ -277,15 +254,16 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_sets_to_delete(&sets, 5000, 1000, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0);
 
-		// Most recent set (index 2) should never be in the deletion list
+		// Most recent set should never be selected
 		let most_recent = &sets[sets.len() - 1];
-		assert!(!result.iter().any(|s| s.name == most_recent.name));
+		assert!(result.is_some());
+		assert_ne!(result.unwrap().name, most_recent.name);
 	}
 
 	#[test]
-	fn test_select_one_set_when_space_needed_zero() {
+	fn test_selects_one_set() {
 		let sets = vec![
 			BackupSetInfo {
 				name: "dhb-set-20240101-000000".to_string(),
@@ -302,9 +280,9 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		// Request 0 bytes - with simplified behavior, picks one set
-		let result = select_sets_to_delete(&sets, 0, 1000, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0);
 
-		assert_eq!(result.len(), 1);
+		// Should select exactly one
+		assert!(result.is_some());
 	}
 }
