@@ -56,27 +56,7 @@ pub fn get_disk_space(path: &Path) -> io::Result<DiskSpace> {
 	let disks = Disks::new_with_refreshed_list();
 
 	// Canonicalize the path to resolve symlinks and make it absolute
-	// If the path doesn't exist, try parent directories until we find one that does
-	let canonical_path = match path.canonicalize() {
-		Ok(p) => p,
-		Err(_) => {
-			// Path doesn't exist yet, try to find an existing parent
-			let mut parent = path;
-			loop {
-				if let Some(p) = parent.parent() {
-					if let Ok(canonical) = p.canonicalize() {
-						break canonical;
-					}
-					parent = p;
-				} else {
-					return Err(io::Error::new(
-						io::ErrorKind::NotFound,
-						format!("Cannot find existing parent for path: {:?}", path),
-					));
-				}
-			}
-		}
-	};
+	let canonical_path = path.canonicalize()?;
 
 	// Find the disk with the longest matching mount point
 	// This handles nested mounts correctly (e.g., /, /home, /home/user/external)
@@ -124,24 +104,6 @@ mod tests {
 		);
 
 		Ok(())
-	}
-
-	#[test]
-	fn test_get_disk_space_nonexistent_path() {
-		// For a path that doesn't exist, it should still find disk space for the parent
-		// (or fail gracefully if no parent exists)
-		let result = get_disk_space(Path::new("/nonexistent/path/that/should/not/exist"));
-
-		// On most systems this will succeed by finding the root filesystem
-		// On some systems it might fail - either way is acceptable
-		match result {
-			Ok(space) => {
-				assert!(space.total > 0, "Should have valid disk space");
-			}
-			Err(e) => {
-				assert_eq!(e.kind(), io::ErrorKind::NotFound);
-			}
-		}
 	}
 
 	#[test]
