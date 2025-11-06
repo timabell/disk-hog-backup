@@ -2,6 +2,11 @@ use std::io;
 use std::path::Path;
 use sysinfo::{Disk, Disks};
 
+/// Trait for checking disk space - allows testing with mocked space values
+pub trait SpaceChecker {
+	fn get_available_space(&self, path: &Path) -> io::Result<u64>;
+}
+
 /// Information about disk space
 #[derive(Debug, Clone, Copy)]
 pub struct DiskSpace {
@@ -104,6 +109,28 @@ pub fn get_disk_space(path: &Path) -> io::Result<DiskSpace> {
 	Ok(DiskSpace::new(disk.total_space(), disk.available_space()))
 }
 
+/// Production implementation using sysinfo crate
+pub struct RealSpaceChecker;
+
+impl SpaceChecker for RealSpaceChecker {
+	fn get_available_space(&self, path: &Path) -> io::Result<u64> {
+		get_disk_space(path).map(|ds| ds.available)
+	}
+}
+
+/// Test implementation returning controlled values
+#[cfg(test)]
+pub struct MockSpaceChecker {
+	pub available: u64,
+}
+
+#[cfg(test)]
+impl SpaceChecker for MockSpaceChecker {
+	fn get_available_space(&self, _path: &Path) -> io::Result<u64> {
+		Ok(self.available)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -190,5 +217,27 @@ mod tests {
 		// Test edge case where available > total (shouldn't happen but let's be safe)
 		let space = DiskSpace::new(100, 200);
 		assert_eq!(space.used, 0); // Should saturate to 0, not overflow
+	}
+
+	#[test]
+	fn test_mock_space_checker() -> io::Result<()> {
+		let mock = MockSpaceChecker { available: 1000 };
+
+		assert_eq!(mock.get_available_space(Path::new("/"))?, 1000);
+
+		Ok(())
+	}
+
+	#[test]
+	fn test_real_space_checker() -> io::Result<()> {
+		let checker = RealSpaceChecker;
+		let current_dir = env::current_dir()?;
+
+		// Test that the real checker returns valid values
+		let available = checker.get_available_space(&current_dir)?;
+
+		assert!(available > 0);
+
+		Ok(())
 	}
 }

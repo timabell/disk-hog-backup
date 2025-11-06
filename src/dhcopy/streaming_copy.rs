@@ -109,9 +109,55 @@ pub fn copy_file_with_streaming(
 	prev_path: Option<&Path>,
 	rel_path: &Path,
 	context: &mut BackupContext,
+	auto_delete: bool,
+	backup_root: &str,
 ) -> io::Result<bool> {
 	let src_metadata = src_path.metadata()?;
 	let file_size = src_metadata.len();
+
+	// Just-in-time space check if auto-delete is enabled
+	if auto_delete {
+		use crate::backup_sets::set_manager;
+		use crate::disk_space::{RealSpaceChecker, SpaceChecker};
+
+		// Get available space on the destination
+		let backup_root_path = Path::new(backup_root);
+		let space_checker = RealSpaceChecker;
+		let available = space_checker.get_available_space(backup_root_path)?;
+
+		// Check if there's enough space for this file
+		if available < file_size {
+			// Insufficient space - need to delete one old backup
+			context.stats.clear_progress_line();
+			eprintln!(
+				"Insufficient space for file (need {}, have {}), auto-deleting old backup...",
+				bytesize::ByteSize(file_size),
+				bytesize::ByteSize(available)
+			);
+
+			// List backup sets and select one to delete using weighted random
+			let sets = set_manager::list_backup_sets(backup_root_path)?;
+			let mut rng = rand::rng();
+			let to_delete = set_manager::select_sets_to_delete(&sets, 0, available, &mut rng, 2.0);
+
+			// Delete the selected set
+			for set in &to_delete {
+				eprintln!("Deleting backup set: {}", set.name);
+				set_manager::delete_backup_set(&set.path)?;
+			}
+
+			if to_delete.is_empty() {
+				eprintln!("Warning: Could not delete any backup sets (preserving last backup)");
+			} else {
+				eprintln!(
+					"Deleted {} backup set(s), resuming copy...",
+					to_delete.len()
+				);
+			}
+
+			context.stats.update_progress_display();
+		}
+	}
 
 	let previous_file = get_matching_previous_file(prev_path, rel_path, context)?;
 

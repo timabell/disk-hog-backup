@@ -18,6 +18,10 @@ struct Args {
 	/// Destination folder for backups
 	#[arg(short, long)]
 	destination: String,
+
+	/// Automatically delete old backups if space is low
+	#[arg(long)]
+	auto_delete: bool,
 }
 
 fn main() {
@@ -28,7 +32,7 @@ fn main() {
 
 	let args = Args::parse();
 
-	match backup(&args.source, &args.destination) {
+	match backup(&args.source, &args.destination, args.auto_delete) {
 		Ok(_) => (),
 		Err(e) => {
 			eprintln!("Backup failed: {}", e);
