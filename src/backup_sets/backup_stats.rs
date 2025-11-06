@@ -69,6 +69,7 @@ struct BackupStatsInner {
 struct DiskSpaceInfo {
 	initial: Option<DiskSpace>,
 	final_space: Option<DiskSpace>,
+	md5_store_size: Option<u64>,
 }
 
 impl BackupStats {
@@ -126,6 +127,7 @@ impl BackupStats {
 				disk_space: Mutex::new(DiskSpaceInfo {
 					initial: initial_disk_space,
 					final_space: None,
+					md5_store_size: None,
 				}),
 			}),
 		}
@@ -299,6 +301,13 @@ impl BackupStats {
 	pub fn set_final_disk_space(&self, disk_space: DiskSpace) {
 		if let Ok(mut info) = self.inner.disk_space.lock() {
 			info.final_space = Some(disk_space);
+		}
+	}
+
+	/// Set the MD5 store file size
+	pub fn set_md5_store_size(&self, size: u64) {
+		if let Ok(mut info) = self.inner.disk_space.lock() {
+			info.md5_store_size = Some(size);
 		}
 	}
 
@@ -758,6 +767,12 @@ impl BackupStats {
 						lines.push(format!(
 							"  Backup freed: {} space",
 							ByteSize((-space_used) as u64)
+						));
+					}
+					if let Some(md5_size) = info.md5_store_size {
+						lines.push(format!(
+							"  MD5 store:   {}",
+							ByteSize(md5_size)
 						));
 					}
 				}

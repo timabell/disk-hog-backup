@@ -162,6 +162,14 @@ pub fn backup_folder(
 	// Clear the progress display before showing final summary
 	context.stats.clear_progress_display();
 
+	context.save_md5_store()?;
+
+	// Capture MD5 store file size
+	let md5_store_path = dest_path.join("disk-hog-backup-hashes.md5");
+	if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
+		context.stats.set_md5_store_size(md5_metadata.len());
+	}
+
 	// Capture final disk space before saving stats
 	// dest_path is the backup set path, we need the parent (backup root) for disk space
 	if let Some(backup_root) = dest_path.parent()
@@ -170,8 +178,6 @@ pub fn backup_folder(
 		context.stats.set_final_disk_space(final_disk_space);
 	}
 
-	// Save the MD5 store and backup statistics
-	context.save_md5_store()?;
 	context.save_stats()?;
 	context.print_stats_summary();
 

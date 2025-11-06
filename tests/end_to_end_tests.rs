@@ -884,10 +884,15 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		.unwrap()
 		.replace_all(&normalized, "Peak: X");
 
-	// Normalize disk space numbers (e.g., "933.9 GB", "47.2 GB", "102.4 KB")
-	let normalized = Regex::new(r"\d+\.\d+ (?:GB|MB|KB|B)")
+	// Normalize disk space numbers only in Disk Space section lines
+	// Match patterns like "123.4 GB", "45 MB", "6.7 KB", "89 B" but only in these specific contexts
+	let normalized = Regex::new(r"(\d+(?:\.\d+)?) ((?:GB|MB|KB|B)) (used|total|available|additional space)")
 		.unwrap()
-		.replace_all(&normalized, "X.X XB");
+		.replace_all(&normalized, "X.X XB $3");
+	// Also normalize the MD5 store line which ends with just the size
+	let normalized = Regex::new(r"(MD5 store:\s+)\d+(?:\.\d+)? (?:GB|MB|KB|B)")
+		.unwrap()
+		.replace_all(&normalized, "${1}X.X XB");
 
 	// Strip trailing whitespace and bar chart characters from each line
 	let mut normalized = normalized
@@ -963,6 +968,7 @@ Disk Space:
   Initial:    X.X XB used of X.X XB total (X.X XB available)
   Final:      X.X XB used of X.X XB total (X.X XB available)
   Backup used: X.X XB additional space
+  MD5 store:   X.X XB
 ";
 
 	assert_eq!(
