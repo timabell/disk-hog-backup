@@ -69,23 +69,46 @@ Test backup set management logic without any disk operations:
 **Tests**:
 ```rust
 #[test]
-fn test_select_oldest_sets_for_deletion() {
+fn test_weighted_random_selection_with_seeded_rng() {
     let sets = vec![
-        BackupSet { name: "set-1", size: 1000, created: time1 },
-        BackupSet { name: "set-2", size: 2000, created: time2 },
-        BackupSet { name: "set-3", size: 1500, created: time3 },
+        BackupSet { name: "set-1", size: 1000, created: days_ago(30) },
+        BackupSet { name: "set-2", size: 2000, created: days_ago(20) },
+        BackupSet { name: "set-3", size: 1500, created: days_ago(10) },
     ];
-    let result = select_sets_to_delete(&sets, 2500, 1000);
-    assert_eq!(result, vec!["set-1", "set-2"]); // oldest first, preserve at least 1
+    // Use seeded RNG for deterministic test
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
+    let result = select_sets_to_delete(&sets, 2500, 1000, &mut rng, 2.0);
+    // With this seed, should select older sets with higher probability
+    assert!(result.len() >= 1); // Freed some space
+    assert!(sets.len() - result.len() >= 1); // Preserved at least 1
 }
 
 #[test]
 fn test_preserve_at_least_one_set() {
     let sets = vec![
-        BackupSet { name: "set-1", size: 5000, created: time1 },
+        BackupSet { name: "set-1", size: 5000, created: days_ago(30) },
     ];
-    let result = select_sets_to_delete(&sets, 10000, 1000);
+    let mut rng = ChaCha8Rng::seed_from_u64(42);
+    let result = select_sets_to_delete(&sets, 10000, 1000, &mut rng, 2.0);
     assert_eq!(result, vec![]); // Never delete the last set
+}
+
+#[test]
+fn test_weight_calculation() {
+    // Old backup with 10-day gap before it: high weight (more likely deleted)
+    let weight_old = calculate_deletion_weight(10.0, 2.0);
+    // Recent backup with 1-day gap before it: low weight (less likely deleted)
+    let weight_recent = calculate_deletion_weight(1.0, 2.0);
+    assert!(weight_old > weight_recent);
+}
+
+#[test]
+fn test_exponent_affects_distribution() {
+    // Higher exponent preserves old backups better
+    let weight_exp_1 = calculate_deletion_weight(10.0, 1.0);
+    let weight_exp_3 = calculate_deletion_weight(10.0, 3.0);
+    // Both are higher for older backups, but exp=1 is more aggressive
+    assert!(weight_exp_1 > weight_exp_3);
 }
 ```
 
@@ -113,13 +136,19 @@ fn test_auto_delete_with_mock_space_checker() {
         total: 100 * 1024,
     };
 
-    // Run backup with auto-delete enabled
-    run_backup_with_checker(&source, &dest, true, mock_checker)?;
+    // Use seeded RNG for deterministic test
+    let rng = ChaCha8Rng::seed_from_u64(42);
 
-    // Verify: oldest set deleted, others preserved
-    assert!(!Path::new(&dest).join("dhb-set-20240101-000000").exists());
-    assert!(Path::new(&dest).join("dhb-set-20240102-000000").exists());
-    assert!(Path::new(&dest).join("dhb-set-20240103-000000").exists());
+    // Run backup with auto-delete enabled
+    run_backup_with_checker(&source, &dest, true, mock_checker, rng)?;
+
+    // Verify: at least one set was deleted, at least one preserved
+    let remaining_sets = count_backup_sets(&dest)?;
+    assert!(remaining_sets >= 1, "Must preserve at least 1 set");
+    assert!(remaining_sets < 3, "Should have deleted at least 1 set");
+
+    // With weighted random and this seed, oldest set most likely deleted
+    // (but we don't assert exact set due to probabilistic nature)
 }
 ```
 
@@ -158,16 +187,38 @@ fn test_auto_delete_integration() {
 
 ### Deletion Strategy
 
-**Initial implementation**: Oldest-first deletion
-- Sort backup sets by creation time (ascending)
-- Delete oldest sets until sufficient space is available
+**Chosen approach**: Weighted random distribution
+- Assign probability weights to each backup set based on age
+- Older backups have higher probability of deletion
+- Recent backups have lower probability of deletion
+- Maintains good temporal distribution of backups over time
+- Handles irregular backup schedules gracefully
+
+**Algorithm** (from backup rotation theory):
+1. For each deletable generation, calculate weight as:
+   ```
+   weight = (1 / time_span_to_previous_backup) ^ exponent
+   ```
+   Where `time_span_to_previous_backup` is days between this backup and the previous one
+
+2. Higher exponent → more uniform distribution (preserves old backups better)
+3. Lower exponent → skews toward recent backups (deletes old backups more readily)
+
+**Constraints**:
 - Always preserve at least 1 previous backup set for hard-linking
 - Delete complete sets only (atomic operation)
+- Only delete when space is actually needed
 
-**Future enhancement**: Weighted random distribution (mentioned in issue)
-- Consider backup age, size, and importance
-- Could implement GFS (Grandfather-Father-Son) retention
-- Defer to future ADR when implementing
+**Alternative considered**: Simple oldest-first deletion
+- **Pros**: Deterministic, simple to implement and test
+- **Cons**: Doesn't maintain good temporal distribution, especially with irregular backups
+- **Verdict**: Rejected in favor of weighted random as specified in issue #11
+
+**Rationale for weighted random**:
+- Better handles missed or irregular backups
+- Maintains coverage across all points in time
+- Probabilistically keeps old backups longer than simple FIFO
+- More sophisticated but still testable with seeded RNG
 
 ## Alternatives Considered
 
@@ -268,6 +319,31 @@ Dependency injection enables us to:
 - Achieve deterministic test behavior
 - Maintain fast test suite (critical for TDD)
 
+### Testing Randomness Deterministically
+
+The weighted random distribution requires randomness, but tests must be deterministic. Solution:
+
+1. **Use seeded RNG in tests**: `ChaCha8Rng::seed_from_u64(42)`
+   - Same seed → same sequence of random numbers
+   - Tests are repeatable and debuggable
+
+2. **Test the weights, not specific outcomes**:
+   - Verify weight calculation is correct (pure function)
+   - Verify older backups have higher deletion probability
+   - Run selection multiple times with different seeds, verify statistical properties
+
+3. **Inject RNG via trait** (production uses thread_rng, tests use seeded):
+   ```rust
+   trait RandomSource {
+       fn gen_range(&mut self, range: Range<f64>) -> f64;
+   }
+   ```
+
+4. **Statistical tests** (optional, more advanced):
+   - Run selection 1000 times with different seeds
+   - Verify older backups deleted more frequently
+   - Check distribution matches expected probabilities
+
 ### Alignment with Codebase Design Principles
 
 From README.md:
@@ -310,10 +386,18 @@ This ADR follows outside-in testing:
 
 1. Create `backup_sets/set_manager.rs`
 2. Implement with tests:
-   - `list_backup_sets()` - enumerate sets with metadata
+   - `list_backup_sets()` - enumerate sets with metadata (creation time, size)
    - `calculate_set_size()` - sum file sizes in a set
-   - `select_sets_to_delete()` - oldest-first with preservation logic
+   - `calculate_deletion_weight(time_span_days, exponent)` - pure weight calculation
+   - `select_sets_to_delete(sets, space_needed, rng, exponent)` - weighted random selection with preservation logic
    - `delete_backup_set()` - atomic set deletion
+
+**Key testing approach**:
+- Use seeded RNG (`ChaCha8Rng::seed_from_u64`) for deterministic tests
+- Test weight calculation as pure function
+- Test that older backups have higher weights
+- Test that at least 1 set is always preserved
+- Test exponent parameter affects distribution
 
 ### Phase 2: Space Management Abstraction
 
@@ -351,24 +435,35 @@ This ADR follows outside-in testing:
 
 ## Open Questions
 
-1. **Should we check space periodically during backup?**
+1. **What exponent should we use for weighted random distribution?**
+   - Lower (e.g., 1.0): More aggressive deletion of old backups
+   - Higher (e.g., 2.0 or 3.0): Better preservation of old backups
+   - Decision: **Start with 2.0 (square)** as mentioned in literature, make configurable later via `--deletion-exponent` flag if needed
+   - Rationale: Square provides good balance, can be tuned based on user feedback
+
+2. **Should we check space periodically during backup?**
    - Pro: Catch space issues mid-backup
-   - Con: Performance overhead
+   - Con: Performance overhead, complexity
    - Decision: Start with pre-backup check only, add monitoring later if needed
 
-2. **What if auto-delete can't free enough space?**
+3. **What if auto-delete can't free enough space?**
    - Option A: Fail with clear error message
    - Option B: Delete as much as possible, attempt backup anyway
-   - Decision: Fail clearly (Option A) - safer and more predictable
+   - Decision: **Fail clearly (Option A)** - safer and more predictable
 
-3. **Should we support minimum retention count?**
+4. **Should we support minimum retention count?**
    - E.g., `--min-backups=3` never deletes if fewer than 3 sets exist
    - Decision: Defer to future enhancement - start with "preserve 1" hardcoded
 
-4. **Should we respect .dhbignore when calculating sizes?**
+5. **Should we respect .dhbignore when calculating sizes?**
    - Pro: More accurate size estimates
    - Con: Requires re-implementing ignore logic in set_manager
-   - Decision: No - use actual on-disk size (simpler, accurate for space management)
+   - Decision: **No** - use actual on-disk size (simpler, accurate for space management)
+
+6. **How to handle first backup (no previous backups)?**
+   - Cannot delete anything (preserve 1 rule)
+   - Must fail if insufficient space
+   - Decision: Fail with helpful message suggesting user free space manually
 
 ## References
 
