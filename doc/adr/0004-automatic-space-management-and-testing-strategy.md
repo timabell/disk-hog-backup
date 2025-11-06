@@ -4,7 +4,7 @@
 
 ## Status
 
-Proposed
+Accepted - Implementation in progress
 
 ## Context
 
@@ -14,9 +14,9 @@ When backing up to external drives or limited storage, backups can fail when the
 
 ### Key Requirements from Issue #11
 
-1. **Proactive space detection**: Detect insufficient space before attempting to write, rather than handling IO errors after the fact
+1. **Just-in-time space detection**: Detect insufficient space when about to copy a file, rather than handling IO errors after the fact
 2. **Delete complete backup sets only**: Never leave partial/incomplete backups
-3. **Weighted deletion strategy**: Consider backup age and importance (initially implementing oldest-first)
+3. **Weighted deletion strategy**: Consider backup age
 4. **Preserve hard-link targets**: Deleting the last previous backup set would eliminate hard-link targets, forcing full re-copies
 5. **Opt-in behavior**: Use `--auto-delete` flag to prevent surprise deletions
 
@@ -31,11 +31,21 @@ This makes the feature difficult to test in a deterministic, fast, and reliable 
 
 ## Decision
 
-We will implement automatic space management using a **layered testing approach** that separates pure logic from system interaction, enabling comprehensive testing without requiring actual disk space manipulation.
+We will implement automatic space management with **just-in-time deletion** triggered at the point where files are being copied. This ensures we only delete backups when actually necessary and provides immediate feedback to the user.
 
 ### Architecture Decision
 
-The implementation will use **dependency injection** and **trait abstraction** to separate disk space checking from backup logic:
+Freeing up space will be done at the **last possible moment** in the copy-files loop. The implementation will:
+
+1. **Check space before each file copy**: In `copy_file_with_streaming()`, before attempting to copy a file, check if there's sufficient space
+2. **Pause and delete if needed**: If insufficient space:
+   - Block the backup process
+   - Output to terminal explaining what's happening
+   - Run the auto-delete logic (delete one old backup using weighted random)
+   - Resume by exiting the blocking synchronous call
+3. **User visibility**: The terminal output keeps users informed when auto-deletion is triggered
+
+The implementation will use **dependency injection** and **trait abstraction** to separate disk space checking from backup logic for testability:
 
 ```rust
 // Abstraction for testability
@@ -54,17 +64,19 @@ struct MockSpaceChecker {
 }
 ```
 
-### Testing Strategy: Three-Layer Approach
+### Testing Strategy: Unit Tests Only
 
-#### Layer 1: Pure Logic Unit Tests (Fast, Deterministic)
+We will focus on **unit testing the space manager logic** with deterministic behavior. End-to-end testing of actual disk space exhaustion is deferred due to the challenges of simulating realistic disk-full scenarios without filling entire disks or creating huge test data sets.
 
-Test backup set management logic without any disk operations:
+#### Unit Tests: Space Manager Logic (Fast, Deterministic)
+
+Test backup set management and selection logic without disk operations:
 
 **Module**: `backup_sets/set_manager.rs`
 - `list_backup_sets()` - enumerate existing sets with metadata
-- `calculate_set_size()` - determine size of a backup set
-- `select_sets_to_delete(sets, space_needed, space_available)` - decide what to delete
+- `select_sets_to_delete()` - weighted random selection of sets to delete
 - `delete_backup_set()` - remove a specific set
+- `calculate_deletion_weight()` - pure weight calculation function
 
 **Tests**:
 ```rust
@@ -112,78 +124,21 @@ fn test_exponent_affects_distribution() {
 }
 ```
 
-#### Layer 2: Integration Tests with Small Files (Moderate Speed, Deterministic)
+#### Testing Gap: End-to-End Validation
 
-Test the orchestration with real files but small sizes:
+**Acknowledged limitation**: We are **not implementing end-to-end tests** for the actual disk space exhaustion scenario at this time.
 
-```rust
-#[test]
-fn test_auto_delete_with_mock_space_checker() {
-    let source = create_tmp_folder("source")?;
-    let dest = create_tmp_folder("dest")?;
+**Rationale**:
+- Testing actual disk-full conditions requires either:
+  - Filling entire test disks with realistic data (GBs), which is slow and resource-intensive
+  - Creating fake/mock disk volumes, which requires specialized test infrastructure
+- Neither approach is practical for fast, deterministic CI/CD pipelines, especially on GitHub Actions
+- **This is not ideal** - we're shipping a feature that interacts with disk space without end-to-end validation of that interaction. However, I'm not willing to delay this feature to figure out what is likely to be a complicated testing solution
 
-    // Create 3 existing backup sets (small but trackable - 1KB each)
-    create_test_backup_set(&dest, "dhb-set-20240101-000000", 1024)?;
-    create_test_backup_set(&dest, "dhb-set-20240102-000000", 2048)?;
-    create_test_backup_set(&dest, "dhb-set-20240103-000000", 1024)?;
-
-    // Create source files that we'll back up (4KB)
-    create_test_file(&source, "file.dat", 4096)?;
-
-    // Inject mock space checker that reports only 3KB free
-    let mock_checker = MockSpaceChecker {
-        available: 3 * 1024,
-        total: 100 * 1024,
-    };
-
-    // Use seeded RNG for deterministic test
-    let rng = ChaCha8Rng::seed_from_u64(42);
-
-    // Run backup with auto-delete enabled
-    run_backup_with_checker(&source, &dest, true, mock_checker, rng)?;
-
-    // Verify: at least one set was deleted, at least one preserved
-    let remaining_sets = count_backup_sets(&dest)?;
-    assert!(remaining_sets >= 1, "Must preserve at least 1 set");
-    assert!(remaining_sets < 3, "Should have deleted at least 1 set");
-
-    // With weighted random and this seed, oldest set most likely deleted
-    // (but we don't assert exact set due to probabilistic nature)
-}
-```
-
-**Key insight**: We test with KB-sized files, not GB-sized files. The logic is the same regardless of scale.
-
-#### Layer 3: End-to-End Tests (Slower, Real System)
-
-Test with real space checking for integration confidence:
-
-```rust
-#[test]
-fn test_auto_delete_integration() {
-    // Use real disk space but small test files
-    // This verifies the full integration works with actual sysinfo
-    let source = create_tmp_folder("source")?;
-    let dest = create_tmp_folder("dest")?;
-
-    // Create multiple existing sets
-    for i in 0..5 {
-        create_test_backup_set(&dest, &format!("dhb-set-2024010{}-000000", i), 512)?;
-    }
-
-    // Backup with auto-delete
-    disk_hog_backup_cmd()
-        .arg("--source").arg(&source)
-        .arg("--destination").arg(&dest)
-        .arg("--auto-delete")
-        .assert()
-        .success();
-
-    // Basic sanity check: some sets may be deleted, at least 1 remains
-    let remaining = count_backup_sets(&dest)?;
-    assert!(remaining >= 1);
-}
-```
+**Future work**: We may return to this testing challenge once the feature is working in production and we have real-world usage patterns to validate against. At that point, we could consider:
+- Manual testing scenarios with nearly-full test drives
+- Integration tests with small disk images/containers
+- Property-based testing with various space constraints
 
 ### Deletion Strategy
 
@@ -290,25 +245,16 @@ fn test_auto_delete_integration() {
 
 ## Rationale
 
-### Why Three-Layer Testing?
+### Why Unit Tests Only?
 
-1. **Layer 1 (Pure Logic)**: Fast feedback during development
-   - Tests run in milliseconds
-   - Perfect for TDD red-green-refactor cycles
-   - Covers all edge cases and error conditions
-   - No flakiness or system dependencies
+**Focus on testable logic**: By isolating the weighted selection algorithm and backup set management logic, we can:
+- Run tests in milliseconds
+- Enable TDD red-green-refactor cycles
+- Cover all edge cases deterministically
+- Avoid flakiness from system dependencies
+- Execute tests in parallel without conflicts
 
-2. **Layer 2 (Integration)**: Realistic orchestration without system dependence
-   - Tests run in hundreds of milliseconds
-   - Verifies components work together correctly
-   - Uses controlled space values to test specific scenarios
-   - Deterministic and repeatable
-
-3. **Layer 3 (E2E)**: Confidence in real-world behavior
-   - Tests run in seconds
-   - Verifies actual system integration
-   - Catches issues with real disk space reporting
-   - Fewer tests needed (sanity checks only)
+**Defer complex E2E testing**: The alternative approaches (filling disks, fake volumes) add significant complexity without proportional value at this stage. The just-in-time deletion approach means failures are graceful and per-file rather than catastrophic.
 
 ### Why Dependency Injection?
 
@@ -399,39 +345,33 @@ This ADR follows outside-in testing:
 - Test that at least 1 set is always preserved
 - Test exponent parameter affects distribution
 
-### Phase 2: Space Management Abstraction
+### Phase 2: Just-in-Time Space Management
 
-1. Define `SpaceChecker` trait in `disk_space.rs`
-2. Implement `RealSpaceChecker` using existing `get_disk_space()`
-3. Implement `MockSpaceChecker` for tests
-4. Add `estimate_backup_size()` function
+1. Modify `copy_file_with_streaming()` in `dhcopy/streaming_copy.rs`:
+   - Before copying each file, check if file size fits in available space
+   - If insufficient space detected:
+     - Output message to terminal: "Insufficient space, auto-deleting old backup..."
+     - Call deletion logic (select and delete one old backup set)
+     - Output message: "Deleted backup set X, resuming..."
+     - Continue with file copy
 
-### Phase 3: Integration Layer
+2. Thread `--auto-delete` flag through to streaming copy function
 
-1. Create `SpaceManager` struct coordinating:
-   - Space checking
-   - Size estimation
-   - Deletion triggering
-2. Add integration tests with mock checker
+3. Pass backup destination path to enable backup set enumeration during copy
 
-### Phase 4: CLI Integration
+### Phase 3: CLI Integration
 
 1. Add `--auto-delete` flag to CLI args
-2. Thread flag through to backup function
-3. Hook space management into backup process:
-   - Check space before backup starts
-   - Trigger deletions if needed
-   - Resume backup after deletion
-4. Add E2E tests
+2. Thread flag through backup call chain to `copy_file_with_streaming()`
+3. Update function signatures to pass destination path where needed
 
-### Phase 5: Monitoring and Logging
+### Phase 4: User Feedback
 
-1. Add logging for:
-   - Space checks and decisions
-   - Sets selected for deletion
-   - Deletion progress
-   - Space freed
-2. Consider progress reporting for long deletions
+1. Add clear terminal output when auto-deletion triggers:
+   - Which backup set is being deleted
+   - Why (insufficient space for current file)
+   - Confirmation when deletion completes
+2. Ensure messages don't interfere with existing progress reporting
 
 ## Open Questions
 
@@ -441,29 +381,19 @@ This ADR follows outside-in testing:
    - Decision: **Start with 2.0 (square)** as mentioned in literature, make configurable later via `--deletion-exponent` flag if needed
    - Rationale: Square provides good balance, can be tuned based on user feedback
 
-2. **Should we check space periodically during backup?**
-   - Pro: Catch space issues mid-backup
-   - Con: Performance overhead, complexity
-   - Decision: Start with pre-backup check only, add monitoring later if needed
+2. **What if auto-delete can't free enough space?**
+   - With just-in-time approach: Delete one backup, attempt file copy, let it fail naturally if still insufficient
+   - User will see the deletion attempt and the subsequent failure, providing clear context
+   - Decision: **Let the file copy fail naturally** - simpler and provides immediate feedback
 
-3. **What if auto-delete can't free enough space?**
-   - Option A: Fail with clear error message
-   - Option B: Delete as much as possible, attempt backup anyway
-   - Decision: **Fail clearly (Option A)** - safer and more predictable
-
-4. **Should we support minimum retention count?**
+3. **Should we support minimum retention count?**
    - E.g., `--min-backups=3` never deletes if fewer than 3 sets exist
    - Decision: Defer to future enhancement - start with "preserve 1" hardcoded
 
-5. **Should we respect .dhbignore when calculating sizes?**
-   - Pro: More accurate size estimates
-   - Con: Requires re-implementing ignore logic in set_manager
-   - Decision: **No** - use actual on-disk size (simpler, accurate for space management)
-
-6. **How to handle first backup (no previous backups)?**
+4. **How to handle first backup (no previous backups)?**
    - Cannot delete anything (preserve 1 rule)
-   - Must fail if insufficient space
-   - Decision: Fail with helpful message suggesting user free space manually
+   - With just-in-time approach: Let individual file copies fail naturally if insufficient space
+   - Decision: No special handling - natural IO error provides clear feedback
 
 ## References
 
