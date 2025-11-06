@@ -1167,30 +1167,5 @@ fn test_disk_space_reporting() -> io::Result<()> {
 	);
 	assert!(stderr.contains("Used:"), "Should report used disk space");
 
-	// Verify final disk space summary
-	assert!(
-		stderr.contains("=== Disk Space Summary ==="),
-		"Should show disk space summary header"
-	);
-	assert!(
-		stderr.contains("Before backup:"),
-		"Should show before backup section"
-	);
-	assert!(
-		stderr.contains("After backup:"),
-		"Should show after backup section"
-	);
-	assert!(
-		stderr.contains("Additional space used:"),
-		"Should show additional space used"
-	);
-	assert!(
-		stderr.contains("=========================="),
-		"Should show summary footer"
-	);
-
-	// Verify that GB units are shown
-	assert!(stderr.contains("GB"), "Should display values in GB");
-
 	Ok(())
 }

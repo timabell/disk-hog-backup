@@ -45,27 +45,5 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 		Some(initial_disk_space),
 	)?;
 
-	// Get disk space after backup
-	let final_disk_space = disk_space::get_disk_space(Path::new(dest))?;
-
-	// Calculate and display the disk space usage summary
-	let space_used = final_disk_space.used_difference(&initial_disk_space);
-
-	eprintln!();
-	eprintln!("=== Disk Space Summary ===");
-	eprintln!("Before backup:");
-	eprintln!("  Available: {}", ByteSize(initial_disk_space.available));
-	eprintln!("  Used:      {}", ByteSize(initial_disk_space.used));
-	eprintln!();
-	eprintln!("After backup:");
-	eprintln!("  Available: {}", ByteSize(final_disk_space.available));
-	eprintln!("  Used:      {}", ByteSize(final_disk_space.used));
-	eprintln!();
-	eprintln!(
-		"Additional space used: {}",
-		ByteSize(space_used.unsigned_abs())
-	);
-	eprintln!("==========================");
-
 	Ok(backup_set_name)
 }
