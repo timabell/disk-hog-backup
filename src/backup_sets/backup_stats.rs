@@ -429,7 +429,7 @@ impl BackupStats {
 			writeln!(file, "{}", line)?;
 		}
 
-		eprintln!("\nBackup Statistics saved to: {}", stats_path.display());
+		eprintln!("Backup Statistics saved to: {}", stats_path.display());
 
 		Ok(())
 	}

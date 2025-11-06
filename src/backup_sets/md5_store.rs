@@ -76,6 +76,9 @@ impl Md5Store {
 			}
 		}
 
+		eprintln!();
+		eprintln!("MD5 hashes saved to: {}", md5_file_path.display());
+
 		Md5Store::create_md5_checksum_of_md5_file(&md5_file_path)?;
 
 		Ok(())
@@ -181,8 +184,10 @@ impl Md5Store {
 				acc
 			});
 
-		let mut file = File::create(md5_checksum_path)?;
+		let mut file = File::create(&md5_checksum_path)?;
 		writeln!(file, "{}  {}", hash_hex, MD5_FILENAME)?;
+
+		eprintln!("MD5 checksum saved to: {}", md5_checksum_path.display());
 
 		Ok(())
 	}
