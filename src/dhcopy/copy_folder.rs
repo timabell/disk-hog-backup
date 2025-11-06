@@ -96,6 +96,7 @@ pub fn backup_folder(
 	dest: &str,
 	prev_backup: Option<&str>,
 	session_id: &str,
+	initial_disk_space: Option<crate::disk_space::DiskSpace>,
 ) -> io::Result<()> {
 	eprintln!("backing up folder {} into {}", source, dest);
 
@@ -121,9 +122,16 @@ pub fn backup_folder(
 			session_id,
 			total_size,
 			size_calc_duration,
+			initial_disk_space,
 		)?
 	} else {
-		BackupContext::new(dest_path, session_id, total_size, size_calc_duration)
+		BackupContext::new(
+			dest_path,
+			session_id,
+			total_size,
+			size_calc_duration,
+			initial_disk_space,
+		)
 	};
 
 	// Track ignored paths
@@ -154,8 +162,22 @@ pub fn backup_folder(
 	// Clear the progress display before showing final summary
 	context.stats.clear_progress_display();
 
-	// Save the MD5 store and backup statistics
 	context.save_md5_store()?;
+
+	// Capture MD5 store file size
+	let md5_store_path = dest_path.join("disk-hog-backup-hashes.md5");
+	if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
+		context.stats.set_md5_store_size(md5_metadata.len());
+	}
+
+	// Capture final disk space before saving stats
+	// dest_path is the backup set path, we need the parent (backup root) for disk space
+	if let Some(backup_root) = dest_path.parent()
+		&& let Ok(final_disk_space) = crate::disk_space::get_disk_space(backup_root)
+	{
+		context.stats.set_final_disk_space(final_disk_space);
+	}
+
 	context.save_stats()?;
 	context.print_stats_summary();
 

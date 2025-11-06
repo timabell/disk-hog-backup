@@ -15,6 +15,7 @@ use std::{
 
 use crate::backup_sets::backup_stats::BackupStats;
 use crate::backup_sets::md5_store::Md5Store;
+use crate::disk_space::DiskSpace;
 
 const CHUNK_SIZE: usize = 256 * 1024; // 256KB per chunk
 const MAX_QUEUE_CHUNKS: usize = 32; // Limit read-ahead to 32 chunks per file
@@ -36,11 +37,18 @@ impl BackupContext {
 		session_id: &str,
 		total_bytes: u64,
 		size_calc_duration: Duration,
+		initial_disk_space: Option<DiskSpace>,
 	) -> Self {
 		BackupContext {
 			prev_md5_store: None,
 			new_md5_store: Md5Store::new(backup_root),
-			stats: BackupStats::new(backup_root, session_id, total_bytes, size_calc_duration),
+			stats: BackupStats::new(
+				backup_root,
+				session_id,
+				total_bytes,
+				size_calc_duration,
+				initial_disk_space,
+			),
 		}
 	}
 
@@ -50,10 +58,17 @@ impl BackupContext {
 		session_id: &str,
 		total_bytes: u64,
 		size_calc_duration: Duration,
+		initial_disk_space: Option<DiskSpace>,
 	) -> io::Result<Self> {
 		let prev_md5_store = Md5Store::load_from_backup(prev_backup)?;
 		let new_md5_store = Md5Store::new(backup_root);
-		let stats = BackupStats::new(backup_root, session_id, total_bytes, size_calc_duration);
+		let stats = BackupStats::new(
+			backup_root,
+			session_id,
+			total_bytes,
+			size_calc_duration,
+			initial_disk_space,
+		);
 
 		Ok(BackupContext {
 			prev_md5_store: Some(prev_md5_store),

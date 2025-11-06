@@ -1,10 +1,11 @@
+use crate::disk_space::DiskSpace;
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use std::fs::File;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const STATS_FILENAME: &str = "disk-hog-backup-stats.txt";
@@ -60,6 +61,15 @@ struct BackupStatsInner {
 
 	// Time taken to calculate total size
 	size_calc_duration: Duration,
+
+	// Disk space tracking (mutable, protected by Mutex)
+	disk_space: Mutex<DiskSpaceInfo>,
+}
+
+struct DiskSpaceInfo {
+	initial: Option<DiskSpace>,
+	final_space: Option<DiskSpace>,
+	md5_store_size: Option<u64>,
 }
 
 impl BackupStats {
@@ -69,6 +79,7 @@ impl BackupStats {
 		session_id: &str,
 		total_bytes: u64,
 		size_calc_duration: Duration,
+		initial_disk_space: Option<DiskSpace>,
 	) -> Self {
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
@@ -113,6 +124,11 @@ impl BackupStats {
 
 				total_bytes,
 				size_calc_duration,
+				disk_space: Mutex::new(DiskSpaceInfo {
+					initial: initial_disk_space,
+					final_space: None,
+					md5_store_size: None,
+				}),
 			}),
 		}
 	}
@@ -281,6 +297,20 @@ impl BackupStats {
 			.fetch_max(depth, Ordering::Relaxed);
 	}
 
+	/// Set the final disk space after backup completion
+	pub fn set_final_disk_space(&self, disk_space: DiskSpace) {
+		if let Ok(mut info) = self.inner.disk_space.lock() {
+			info.final_space = Some(disk_space);
+		}
+	}
+
+	/// Set the MD5 store file size
+	pub fn set_md5_store_size(&self, size: u64) {
+		if let Ok(mut info) = self.inner.disk_space.lock() {
+			info.md5_store_size = Some(size);
+		}
+	}
+
 	/// Format duration as HH:MM:SS.mmm
 	fn format_duration(duration: Duration) -> String {
 		let total_millis = duration.as_millis();
@@ -384,6 +414,9 @@ impl BackupStats {
 		// Add pipeline stats
 		lines.extend(self.format_pipeline_stats(elapsed));
 
+		// Add disk space information
+		lines.extend(self.format_disk_space_info());
+
 		lines
 	}
 
@@ -396,7 +429,7 @@ impl BackupStats {
 			writeln!(file, "{}", line)?;
 		}
 
-		eprintln!("\nBackup Statistics saved to: {}", stats_path.display());
+		eprintln!("Backup Statistics saved to: {}", stats_path.display());
 
 		Ok(())
 	}
@@ -701,6 +734,52 @@ impl BackupStats {
 
 		eprintln!();
 	}
+
+	/// Format disk space information as strings
+	fn format_disk_space_info(&self) -> Vec<String> {
+		if let Ok(info) = self.inner.disk_space.lock() {
+			let mut lines = vec![];
+
+			if let Some(initial) = info.initial {
+				lines.push(String::new());
+				lines.push("Disk Space:".to_string());
+				lines.push(format!(
+					"  Initial:    {} used of {} total ({} available)",
+					ByteSize(initial.used),
+					ByteSize(initial.total),
+					ByteSize(initial.available)
+				));
+
+				if let Some(final_space) = info.final_space {
+					let space_used = final_space.used_difference(&initial);
+					lines.push(format!(
+						"  Final:      {} used of {} total ({} available)",
+						ByteSize(final_space.used),
+						ByteSize(final_space.total),
+						ByteSize(final_space.available)
+					));
+					if space_used >= 0 {
+						lines.push(format!(
+							"  Backup used: {} additional space",
+							ByteSize(space_used as u64)
+						));
+					} else {
+						lines.push(format!(
+							"  Backup freed: {} space",
+							ByteSize((-space_used) as u64)
+						));
+					}
+					if let Some(md5_size) = info.md5_store_size {
+						lines.push(format!("  MD5 store:   {}", ByteSize(md5_size)));
+					}
+				}
+			}
+
+			lines
+		} else {
+			vec![]
+		}
+	}
 }
 
 #[cfg(test)]
@@ -717,6 +796,7 @@ mod tests {
 			"test-session-id",
 			0,
 			Duration::from_secs(0),
+			None,
 		);
 
 		assert_eq!(stats.inner.files_hardlinked.load(Ordering::Relaxed), 0);
@@ -737,6 +817,7 @@ mod tests {
 			"test-session-id",
 			0,
 			Duration::from_secs(0),
+			None,
 		);
 
 		// Add some I/O operations
@@ -781,6 +862,7 @@ mod tests {
 			"test-session-id",
 			0,
 			Duration::from_secs(0),
+			None,
 		);
 
 		let threads: Vec<_> = (0..10)
@@ -819,6 +901,7 @@ mod tests {
 			"dhb-set-20250929-131320",
 			0,
 			Duration::from_secs(0),
+			None,
 		);
 
 		// Add some data

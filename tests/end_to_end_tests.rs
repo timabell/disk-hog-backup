@@ -884,6 +884,17 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		.unwrap()
 		.replace_all(&normalized, "Peak: X");
 
+	// Normalize disk space numbers only in Disk Space section lines
+	// Match patterns like "123.4 GB", "45 MB", "6.7 KB", "89 B" but only in these specific contexts
+	let normalized =
+		Regex::new(r"(\d+(?:\.\d+)?) ((?:GB|MB|KB|B)) (used|total|available|additional space)")
+			.unwrap()
+			.replace_all(&normalized, "X.X XB $3");
+	// Also normalize the MD5 store line which ends with just the size
+	let normalized = Regex::new(r"(MD5 store:\s+)\d+(?:\.\d+)? (?:GB|MB|KB|B)")
+		.unwrap()
+		.replace_all(&normalized, "${1}X.X XB");
+
 	// Strip trailing whitespace and bar chart characters from each line
 	let mut normalized = normalized
 		.lines()
@@ -953,6 +964,12 @@ Queue Stats:
   Writer Queue: Avg: X.X/32 (XX.X%) | Peak: X/32
   Hasher Queue: Avg: X.X/32 (XX.X%) | Peak: X/32
 
+
+Disk Space:
+  Initial:    X.X XB used of X.X XB total (X.X XB available)
+  Final:      X.X XB used of X.X XB total (X.X XB available)
+  Backup used: X.X XB additional space
+  MD5 store:   X.X XB
 ";
 
 	assert_eq!(
@@ -1117,6 +1134,45 @@ fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
 		stats.contains("Copied:           2 files"),
 		"Should copy 2 files (size_change.txt, content_change.txt)"
 	);
+
+	Ok(())
+}
+
+#[test]
+fn test_disk_space_reporting() -> io::Result<()> {
+	// Set up source directory with test files
+	let source = create_tmp_folder("disk_space_source")?;
+	create_test_file(&source, "file1.txt", "test content 1")?;
+	create_test_file(&source, "file2.txt", "test content 2")?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("disk_space_backups")?;
+
+	// Run backup command and capture output
+	let output = disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.output()?;
+
+	// Check that the command succeeded
+	assert!(output.status.success(), "Backup command should succeed");
+
+	// Convert stderr to string (all output goes to stderr)
+	let stderr = String::from_utf8_lossy(&output.stderr);
+
+	// Verify initial disk space reporting
+	assert!(
+		stderr.contains("Target disk space before backup:"),
+		"Should report disk space before backup"
+	);
+	assert!(stderr.contains("Total:"), "Should report total disk space");
+	assert!(
+		stderr.contains("Available:"),
+		"Should report available disk space"
+	);
+	assert!(stderr.contains("Used:"), "Should report used disk space");
 
 	Ok(())
 }
