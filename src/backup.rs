@@ -6,6 +6,7 @@ use crate::backup_sets::backup_set;
 use crate::backup_sets::set_namer;
 use crate::dhcopy::copy_folder;
 use crate::disk_space;
+use bytesize::ByteSize;
 
 pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 	// Create the backup destination directory if it doesn't exist
@@ -14,18 +15,9 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 	// Get disk space at the start of backup
 	let initial_disk_space = disk_space::get_disk_space(Path::new(dest))?;
 	eprintln!("Target disk space before backup:");
-	eprintln!(
-		"  Total:     {} GB",
-		initial_disk_space.total as f64 / 1_000_000_000.0
-	);
-	eprintln!(
-		"  Available: {} GB",
-		initial_disk_space.available as f64 / 1_000_000_000.0
-	);
-	eprintln!(
-		"  Used:      {} GB",
-		initial_disk_space.used as f64 / 1_000_000_000.0
-	);
+	eprintln!("  Total:     {}", ByteSize(initial_disk_space.total));
+	eprintln!("  Available: {}", ByteSize(initial_disk_space.available));
+	eprintln!("  Used:      {}", ByteSize(initial_disk_space.used));
 	eprintln!();
 
 	// Find the most recent backup set to use for hardlinking
@@ -62,28 +54,16 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 	eprintln!();
 	eprintln!("=== Disk Space Summary ===");
 	eprintln!("Before backup:");
-	eprintln!(
-		"  Available: {:.2} GB",
-		initial_disk_space.available as f64 / 1_000_000_000.0
-	);
-	eprintln!(
-		"  Used:      {:.2} GB",
-		initial_disk_space.used as f64 / 1_000_000_000.0
-	);
+	eprintln!("  Available: {}", ByteSize(initial_disk_space.available));
+	eprintln!("  Used:      {}", ByteSize(initial_disk_space.used));
 	eprintln!();
 	eprintln!("After backup:");
-	eprintln!(
-		"  Available: {:.2} GB",
-		final_disk_space.available as f64 / 1_000_000_000.0
-	);
-	eprintln!(
-		"  Used:      {:.2} GB",
-		final_disk_space.used as f64 / 1_000_000_000.0
-	);
+	eprintln!("  Available: {}", ByteSize(final_disk_space.available));
+	eprintln!("  Used:      {}", ByteSize(final_disk_space.used));
 	eprintln!();
 	eprintln!(
-		"Additional space used: {:.2} GB",
-		space_used.abs() as f64 / 1_000_000_000.0
+		"Additional space used: {}",
+		ByteSize(space_used.unsigned_abs())
 	);
 	eprintln!("==========================");
 
