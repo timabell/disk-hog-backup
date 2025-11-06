@@ -10,7 +10,7 @@ Proposed
 
 When backing up to external drives or limited storage, backups can fail when the disk runs out of space. The current implementation will encounter IO errors when attempting to write files to a full disk, similar to BackInTime's behavior. This requires manual intervention to free up space and retry the backup.
 
-GitHub issue #11 requests automatic removal of old backups when disk space runs low, allowing backups to complete successfully by proactively managing available space.
+[GitHub issue #11](https://github.com/timabell/disk-hog-backup/issues/11) requests automatic removal of old backups when disk space runs low, allowing backups to complete successfully by proactively managing available space.
 
 ### Key Requirements from Issue #11
 
@@ -212,7 +212,7 @@ fn test_auto_delete_integration() {
 **Alternative considered**: Simple oldest-first deletion
 - **Pros**: Deterministic, simple to implement and test
 - **Cons**: Doesn't maintain good temporal distribution, especially with irregular backups
-- **Verdict**: Rejected in favor of weighted random as specified in issue #11
+- **Verdict**: Rejected in favor of weighted random as specified in [issue #11](https://github.com/timabell/disk-hog-backup/issues/11)
 
 **Rationale for weighted random**:
 - Better handles missed or irregular backups
@@ -467,7 +467,7 @@ This ADR follows outside-in testing:
 
 ## References
 
-- GitHub issue #11: Removal of least important backups/files as space runs low
+- [GitHub issue #11](https://github.com/timabell/disk-hog-backup/issues/11): Removal of least important backups/files as space runs low
 - ADR-003: Use sysinfo Crate for Disk Space Information (related to space checking)
 - README.md: Outside-in testing approach
 - Backup rotation theory: https://en.wikipedia.org/wiki/Backup_rotation_scheme
