@@ -12,18 +12,33 @@ echo "  2. Run backups repeatedly to fill the 100MB target disk"
 echo "  3. Show auto-delete triggering when space runs low"
 echo "  4. Continue creating successful backups despite limited space"
 echo ""
+echo "Expected progression (86MB disk, 10MB files):"
+echo ""
+echo "Iter | Source Files | Size | Action              | Sets | Total | Notes"
+echo "-----|--------------|------|---------------------|------|-------|------------------"
+echo "1    | file001      | 10MB | First backup        | 1    | ~10MB | Nothing to link"
+echo "2    | file001-002  | 20MB | Add file002         | 2    | ~30MB | file001 linked"
+echo "3    | file001-003  | 30MB | Add file003         | 3    | ~60MB | file001-002 linked"
+echo "4    | file002-004  | 30MB | Add 004, del 001    | 4    | ~90MB | Getting full"
+echo "5    | file003-005  | 30MB | Add 005, del 002    | 3    | ~60MB | AUTO-DELETE set 1"
+echo "6    | file004-006  | 30MB | Add 006, del 003    | 3    | ~60MB | AUTO-DELETE set 2"
+echo "7+   | ...          | 30MB | Add 1, del 1        | 3    | ~60MB | AUTO-DELETE each"
+echo ""
+echo "Strategy: Keep source at 30MB (3 files) to allow 2-3 backup sets + overhead"
+echo ""
 
-SOURCE_DIR="/tmp/dhb-src"
-DEST_DIR="/media/tim/small"
+SOURCE_DIR="/tmp/dhb-src-$(date +%s)"
+DEST_DIR="/media/tim/small/full-disk-test"
 
 echo "Source: $SOURCE_DIR"
 echo "Destination: $DEST_DIR"
 echo ""
 
-# Check if destination exists
-if [ ! -d "$DEST_DIR" ]; then
-	echo "ERROR: Destination directory $DEST_DIR does not exist"
-	echo "Please create a 100MB test disk and mount it at $DEST_DIR"
+# Check if destination parent exists
+DEST_PARENT=$(dirname "$DEST_DIR")
+if [ ! -d "$DEST_PARENT" ]; then
+	echo "ERROR: Destination parent directory $DEST_PARENT does not exist"
+	echo "Please create a 100MB test disk and mount it at $DEST_PARENT"
 	exit 1
 fi
 
@@ -38,7 +53,7 @@ if [ "$DISK_SIZE" -lt 90 ] || [ "$DISK_SIZE" -gt 110 ]; then
 	echo ""
 fi
 
-# Create source directory if it doesn't exist
+# Create source directory
 echo "Creating source directory..."
 mkdir -p "$SOURCE_DIR"
 echo "Done."
@@ -94,17 +109,15 @@ for i in {1..10}; do
 	echo "========================================"
 	echo ""
 
-	# Add 2 new files each iteration
-	file_num_1=$(printf "%03d" $((i * 2 - 1)))
-	file_num_2=$(printf "%03d" $((i * 2)))
+	# Add 1 new file each iteration
+	file_num=$(printf "%03d" $i)
 
-	echo "Adding new files to source:"
-	create_test_file "file${file_num_1}.bin"
-	create_test_file "file${file_num_2}.bin"
+	echo "Adding new file to source:"
+	create_test_file "file${file_num}.bin"
 	echo ""
 
-	# Delete the oldest file to keep source size growing but not linearly
-	if [ $i -gt 2 ]; then
+	# Delete oldest file to keep source size stable at ~30MB (3 files)
+	if [ $i -gt 3 ]; then
 		delete_candidate=$(ls "$SOURCE_DIR" | head -1)
 		if [ -n "$delete_candidate" ]; then
 			echo "Deleting oldest file from source: $delete_candidate"
