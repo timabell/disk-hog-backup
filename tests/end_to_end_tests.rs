@@ -1176,3 +1176,41 @@ fn test_disk_space_reporting() -> io::Result<()> {
 
 	Ok(())
 }
+
+#[test]
+fn test_auto_delete_flag() -> io::Result<()> {
+	// Set up source directory with test files
+	let source = create_tmp_folder("auto_delete_source")?;
+	create_test_file(&source, "file.txt", "test content")?;
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("auto_delete_backups")?;
+
+	// Run backup command WITH --auto-delete flag
+	let output = disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.arg("--auto-delete")
+		.output()?;
+
+	// Check that the command succeeded
+	assert!(
+		output.status.success(),
+		"Backup with auto-delete should succeed"
+	);
+
+	// Verify backup was created
+	let sets: Vec<_> = fs::read_dir(&backup_root)?
+		.filter_map(Result::ok)
+		.filter(|e| e.file_name().to_string_lossy().starts_with("dhb-set-"))
+		.collect();
+	assert_eq!(sets.len(), 1, "Should have created one backup set");
+
+	// Note: This test doesn't trigger actual disk-full conditions
+	// Just-in-time deletion messaging would only appear if disk space was actually low
+	// Per ADR-004, we accept the testing gap for E2E disk exhaustion scenarios
+
+	Ok(())
+}

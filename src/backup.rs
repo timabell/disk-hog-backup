@@ -8,7 +8,7 @@ use crate::dhcopy::copy_folder;
 use crate::disk_space;
 use bytesize::ByteSize;
 
-pub fn backup(source: &str, dest: &str) -> io::Result<String> {
+pub fn backup(source: &str, dest: &str, auto_delete: bool) -> io::Result<String> {
 	// Create the backup destination directory if it doesn't exist
 	fs::create_dir_all(dest)?;
 
@@ -43,6 +43,10 @@ pub fn backup(source: &str, dest: &str) -> io::Result<String> {
 		prev_backup.as_deref(),
 		&backup_set_name,
 		Some(initial_disk_space),
+		copy_folder::AutoDeleteConfig {
+			enabled: auto_delete,
+			backup_root: dest,
+		},
 	)?;
 
 	Ok(backup_set_name)

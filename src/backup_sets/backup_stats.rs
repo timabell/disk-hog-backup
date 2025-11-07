@@ -64,6 +64,9 @@ struct BackupStatsInner {
 
 	// Disk space tracking (mutable, protected by Mutex)
 	disk_space: Mutex<DiskSpaceInfo>,
+
+	// Auto-deleted backup sets (mutable, protected by Mutex)
+	deleted_sets: Mutex<Vec<String>>,
 }
 
 struct DiskSpaceInfo {
@@ -129,6 +132,7 @@ impl BackupStats {
 					final_space: None,
 					md5_store_size: None,
 				}),
+				deleted_sets: Mutex::new(Vec::new()),
 			}),
 		}
 	}
@@ -311,6 +315,12 @@ impl BackupStats {
 		}
 	}
 
+	pub fn add_deleted_set(&self, set_name: String) {
+		if let Ok(mut deleted_sets) = self.inner.deleted_sets.lock() {
+			deleted_sets.push(set_name);
+		}
+	}
+
 	/// Format duration as HH:MM:SS.mmm
 	fn format_duration(duration: Duration) -> String {
 		let total_millis = duration.as_millis();
@@ -416,6 +426,17 @@ impl BackupStats {
 
 		// Add disk space information
 		lines.extend(self.format_disk_space_info());
+
+		// Add deleted backup sets information
+		if let Ok(deleted_sets) = self.inner.deleted_sets.lock()
+			&& !deleted_sets.is_empty()
+		{
+			lines.push(String::new());
+			lines.push("Auto-Deleted Backup Sets:".to_string());
+			for set_name in deleted_sets.iter() {
+				lines.push(format!("  {}", set_name));
+			}
+		}
 
 		lines
 	}

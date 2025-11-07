@@ -4,7 +4,7 @@ use std::{
 	fmt::Write,
 	fs::{self, File},
 	io::{self, Read, Write as IoWrite},
-	path::Path,
+	path::{Path, PathBuf},
 	sync::{
 		Arc,
 		atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -29,6 +29,7 @@ pub struct BackupContext {
 	pub prev_md5_store: Option<Md5Store>,
 	pub new_md5_store: Md5Store,
 	pub stats: BackupStats,
+	pub prev_backup_path: Option<PathBuf>,
 }
 
 impl BackupContext {
@@ -49,6 +50,7 @@ impl BackupContext {
 				size_calc_duration,
 				initial_disk_space,
 			),
+			prev_backup_path: None,
 		}
 	}
 
@@ -74,6 +76,7 @@ impl BackupContext {
 			prev_md5_store: Some(prev_md5_store),
 			new_md5_store,
 			stats,
+			prev_backup_path: Some(prev_backup.to_path_buf()),
 		})
 	}
 
@@ -90,6 +93,57 @@ impl BackupContext {
 	}
 }
 
+/// Ensure sufficient disk space is available before copying a file.
+/// If auto-delete is enabled and space is insufficient, deletes one old backup set
+/// using weighted random selection.
+///
+/// Protects backup sets in `exclude_from_deletion` from being deleted.
+///
+/// See doc/adr/0004-automatic-space-management-and-testing-strategy.md
+fn ensure_space_for_file(
+	file_size: u64,
+	backup_root: &Path,
+	exclude_from_deletion: &[&Path],
+	context: &mut BackupContext,
+) -> io::Result<()> {
+	use crate::backup_sets::set_manager;
+	use crate::disk_space;
+
+	// Get available space on the destination
+	let available = disk_space::get_disk_space(backup_root)?.available;
+
+	// Check if there's enough space for this file
+	if available < file_size {
+		// Insufficient space - need to delete one old backup
+		context.stats.clear_progress_line();
+		eprintln!(
+			"⚠️ Insufficient space for file (need {}, have {}), auto-deleting old backup...",
+			bytesize::ByteSize(file_size),
+			bytesize::ByteSize(available)
+		);
+
+		// List backup sets and select one to delete using weighted random
+		let sets = set_manager::list_backup_sets(backup_root)?;
+		let mut rng = rand::rng();
+		let to_delete =
+			set_manager::select_set_to_delete(&sets, &mut rng, 2.0, exclude_from_deletion);
+
+		// Delete the selected set
+		if let Some(set) = to_delete {
+			eprintln!("🗑️ Deleting backup set: {}", set.name);
+			set_manager::delete_backup_set(&set.path)?;
+			context.stats.add_deleted_set(set.name.clone());
+			eprintln!("Deleted backup set, resuming copy...");
+		} else {
+			eprintln!("❌ Warning: Could not delete any backup sets (preserving last backup)");
+		}
+
+		context.stats.update_progress_display();
+	}
+
+	Ok(())
+}
+
 // Reference to the same file in the previous backup set
 struct PreviousFile<'a> {
 	path: &'a Path,
@@ -103,15 +157,35 @@ struct StreamPipelineArgs<'a> {
 	stats: &'a BackupStats,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn copy_file_with_streaming(
 	src_path: &Path,
 	dst_path: &Path,
 	prev_path: Option<&Path>,
 	rel_path: &Path,
 	context: &mut BackupContext,
+	auto_delete: bool,
+	backup_root: &str,
+	current_backup_set: &Path,
 ) -> io::Result<bool> {
 	let src_metadata = src_path.metadata()?;
 	let file_size = src_metadata.len();
+
+	// Just-in-time space check if auto-delete is enabled
+	if auto_delete {
+		let backup_root_path = Path::new(backup_root);
+
+		// Build list of backups to exclude from deletion:
+		// 1. Current in-progress backup
+		// 2. Previous backup (if using for hardlinks)
+		let prev_backup = context.prev_backup_path.clone();
+		let mut exclude: Vec<&Path> = vec![current_backup_set];
+		if let Some(prev) = &prev_backup {
+			exclude.push(prev.as_path());
+		}
+
+		ensure_space_for_file(file_size, backup_root_path, &exclude, context)?;
+	}
 
 	let previous_file = get_matching_previous_file(prev_path, rel_path, context)?;
 

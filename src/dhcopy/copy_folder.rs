@@ -90,6 +90,12 @@ fn calculate_directory_size_recursive(
 	Ok(())
 }
 
+/// Auto-delete configuration for space management
+pub struct AutoDeleteConfig<'a> {
+	pub enabled: bool,
+	pub backup_root: &'a str,
+}
+
 /// Performs a backup of a folder with MD5-based hardlinking optimization
 pub fn backup_folder(
 	source: &str,
@@ -97,6 +103,7 @@ pub fn backup_folder(
 	prev_backup: Option<&str>,
 	session_id: &str,
 	initial_disk_space: Option<crate::disk_space::DiskSpace>,
+	auto_delete_config: AutoDeleteConfig,
 ) -> io::Result<()> {
 	eprintln!("backing up folder {} into {}", source, dest);
 
@@ -145,6 +152,7 @@ pub fn backup_folder(
 		prev_backup,
 		&mut context,
 		&mut ignored_paths,
+		&auto_delete_config,
 	)?;
 
 	// Output summary of ignored paths
@@ -191,6 +199,7 @@ fn process_directory(
 	prev_backup: Option<&str>,
 	context: &mut BackupContext,
 	ignored_paths: &mut HashSet<String>,
+	auto_delete_config: &AutoDeleteConfig,
 ) -> io::Result<()> {
 	// Create the destination directory if it doesn't exist
 	fs::create_dir_all(dest_path)?;
@@ -211,10 +220,12 @@ fn process_directory(
 		context,
 		&ignore_manager,
 		ignored_paths,
+		auto_delete_config,
 	)
 }
 
 /// Recursively process a directory, respecting ignore patterns
+#[allow(clippy::too_many_arguments)]
 fn process_directory_recursive(
 	base_path: &Path,
 	current_path: &Path,
@@ -223,6 +234,7 @@ fn process_directory_recursive(
 	context: &mut BackupContext,
 	ignore_manager: &IgnoreManager,
 	ignored_paths: &mut HashSet<String>,
+	auto_delete_config: &AutoDeleteConfig,
 ) -> io::Result<()> {
 	// Read the directory entries
 	for entry in fs::read_dir(current_path)? {
@@ -308,6 +320,7 @@ fn process_directory_recursive(
 				context,
 				&local_ignore_manager,
 				ignored_paths,
+				auto_delete_config,
 			)?;
 		} else {
 			// Ensure parent directories exist
@@ -332,6 +345,9 @@ fn process_directory_recursive(
 				prev_backup_path.as_deref(),
 				rel_path,
 				context,
+				auto_delete_config.enabled,
+				auto_delete_config.backup_root,
+				dest_path,
 			)?;
 		}
 	}

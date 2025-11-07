@@ -277,6 +277,7 @@ dependencies = [
  "md5",
  "predicates",
  "rand",
+ "rand_chacha",
  "regex",
  "sysinfo",
  "tempfile",
