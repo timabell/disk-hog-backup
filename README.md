@@ -11,8 +11,12 @@
 - No encryption / obfuscation / proprietary binary formats
   - Because LVM+LUKS can do that at the filesystem layer and the last thing you want when restoring is a bunch of files you can't read.
 - Automatic spotting of lost/deleted/corrupt files since last backup (todo)
-- Self-management of disk space (todo)
-	- Keeping as many files and versions as possible in the available space, intended to make best use of external USB drives.
+- Automatic space management with `--auto-delete`
+	- Just-in-time deletion of old backups when disk space runs low
+	- Intelligent weighted-random selection favoring deletion of older backups
+	- Preserves temporal distribution of backups over time
+	- Keeps as many backup versions as possible in available space
+	- Perfect for external USB drives and limited storage scenarios
 
 # Work in progress!
 
@@ -33,6 +37,10 @@ disk-hog-backup --source <SOURCE> --destination <DESTINATION>
 - `--source <SOURCE>`: The directory to back up
 - `--destination <DESTINATION>`: The directory where backups will be stored
 
+## Optional Arguments
+
+- `--auto-delete`: Enable automatic deletion of old backups when disk space is low
+
 # Examples
 
 ## Backing up your home directory to an external drive
@@ -45,6 +53,38 @@ disk-hog-backup --source /home/username/Documents --destination /media/username/
 disk-hog-backup --source /home/username --destination /media/username/ExternalDrive/backups
 ```
 
+## Using Auto-Delete for Limited Storage
+
+When backing up to external drives or limited storage devices, use the `--auto-delete` flag to automatically manage space:
+
+```bash
+# Automatically delete old backups when space runs low
+disk-hog-backup --source /home/username/Documents \
+                --destination /media/username/ExternalDrive/backups \
+                --auto-delete
+```
+
+### How Auto-Delete Works
+
+The `--auto-delete` feature intelligently manages disk space by:
+
+1. **Just-in-time detection**: Before copying each file, checks if there's sufficient space available
+2. **Smart deletion**: When space is low, automatically deletes old backup sets using a weighted-random algorithm that:
+   - Favors deletion of older backups
+   - Preserves good temporal distribution across all backups
+   - Handles irregular backup schedules gracefully
+   - Always keeps at least one previous backup (for hard-linking)
+3. **Transparent operation**: Shows clear messages when auto-deletion occurs, including which backup set was deleted
+
+**Example scenario**: Backing up to a 100MB external drive with 10MB files:
+- First backup: Creates backup set #1 (10MB used)
+- Second backup: Creates backup set #2 (20MB used - files hard-linked where unchanged)
+- Continues until disk is nearly full...
+- When space runs low: Automatically deletes oldest backup set before copying next file
+- Result: Maintains as many backup versions as possible within available space
+
+See [ADR-004](doc/adr/0004-automatic-space-management-and-testing-strategy.md) for implementation details.
+
 ## Scheduled Backups with cron
 
 To run backups automatically, you can add a cron job:
@@ -55,6 +95,9 @@ crontab -e
 
 # Add a line to run backups daily at 2 AM
 0 2 * * * /usr/local/bin/disk-hog-backup --source /home/username --destination /media/username/ExternalDrive/backups
+
+# Or with auto-delete for limited storage
+0 2 * * * /usr/local/bin/disk-hog-backup --source /home/username --destination /media/username/ExternalDrive/backups --auto-delete
 ```
 
 # Verifying Backups
@@ -87,6 +130,8 @@ This allows you to detect any file corruption that might have occurred since the
 - Use `.dhbignore` files (see below) to exclude temporary files and large directories you don't need to back up
 - Check the backup logs periodically to ensure everything is working correctly
 - Periodically verify your backups using the md5sum commands above to ensure data integrity
+- For limited storage devices (external USB drives, etc.), use `--auto-delete` to maximize the number of backup versions that fit
+- The `--auto-delete` feature is opt-in to prevent surprise deletions - only enable it when you understand the behavior
 
 # Ignoring Files
 
@@ -152,5 +197,4 @@ The `.dhbignore` file supports the following pattern syntax:
 # Code Design
 
 * [Outside-in-tests](https://pod.0x5.uk/25)
-* ADRs - Architecture Decision Records
-	* [0001-streaming-copy-and-md5.md](doc/adr/0001-streaming-copy-and-md5.md)
+* [Architecture Decision Records (ADRs)](doc/adr/)
