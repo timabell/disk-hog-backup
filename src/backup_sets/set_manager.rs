@@ -66,13 +66,15 @@ pub fn calculate_deletion_weight(time_span_days: f64, exponent: f64) -> f64 {
 /// have higher deletion probability.
 ///
 /// Returns the selected set, or None if no sets can be deleted.
-/// Always preserves at least one backup set (the most recent for hard-linking).
+/// Preserves all backup sets in `exclude_from_deletion` (typically the current
+/// in-progress backup and the previous backup used for hard-linking).
 ///
 /// See doc/adr/0004-automatic-space-management-and-testing-strategy.md
 pub fn select_set_to_delete<R: rand::Rng>(
 	sets: &[BackupSetInfo],
 	rng: &mut R,
 	exponent: f64,
+	exclude_from_deletion: &[&Path],
 ) -> Option<BackupSetInfo> {
 	// Must preserve at least 1 set for hard-linking
 	if sets.len() <= 1 {
@@ -103,11 +105,11 @@ pub fn select_set_to_delete<R: rand::Rng>(
 		weights.push(weight);
 	}
 
-	// Create a pool of deletable sets (all except the last one)
-	// We preserve the most recent backup for hard-linking
-	let deletable: Vec<(&BackupSetInfo, f64)> = sets[..sets.len() - 1]
+	// Create a pool of deletable sets, excluding any in the exclude list
+	let deletable: Vec<(&BackupSetInfo, f64)> = sets
 		.iter()
 		.zip(weights.iter())
+		.filter(|(set, _)| !exclude_from_deletion.contains(&set.path.as_path()))
 		.map(|(set, &weight)| (set, weight))
 		.collect();
 
@@ -197,7 +199,7 @@ mod tests {
 		}];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_set_to_delete(&sets, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0, &[]);
 
 		// Never delete the last (only) set
 		assert!(result.is_none());
@@ -227,14 +229,14 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_set_to_delete(&sets, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0, &[]);
 
 		// Should select exactly one set
 		assert!(result.is_some());
 		let selected = result.unwrap();
 
-		// Should not be the most recent
-		assert_ne!(selected.name, "dhb-set-20240103-000000");
+		// Can select any of the sets since we're not excluding any
+		assert!(sets.iter().any(|s| s.name == selected.name));
 	}
 
 	#[test]
@@ -261,10 +263,12 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_set_to_delete(&sets, &mut rng, 2.0);
-
-		// Most recent set should never be selected
+		// Exclude the most recent to test preservation
 		let most_recent = &sets[sets.len() - 1];
+		let exclude = vec![most_recent.path.as_path()];
+		let result = select_set_to_delete(&sets, &mut rng, 2.0, &exclude);
+
+		// Most recent set should never be selected since it's excluded
 		assert!(result.is_some());
 		assert_ne!(result.unwrap().name, most_recent.name);
 	}
@@ -287,7 +291,7 @@ mod tests {
 		];
 
 		let mut rng = ChaCha8Rng::seed_from_u64(42);
-		let result = select_set_to_delete(&sets, &mut rng, 2.0);
+		let result = select_set_to_delete(&sets, &mut rng, 2.0, &[]);
 
 		// Should select exactly one
 		assert!(result.is_some());

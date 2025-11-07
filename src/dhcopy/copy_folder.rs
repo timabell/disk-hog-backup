@@ -347,6 +347,7 @@ fn process_directory_recursive(
 				context,
 				auto_delete_config.enabled,
 				auto_delete_config.backup_root,
+				dest_path,
 			)?;
 		}
 	}
