@@ -132,6 +132,7 @@ fn ensure_space_for_file(
 		if let Some(set) = to_delete {
 			eprintln!("🗑️ Deleting backup set: {}", set.name);
 			set_manager::delete_backup_set(&set.path)?;
+			context.stats.add_deleted_set(set.name.clone());
 			eprintln!("Deleted backup set, resuming copy...");
 		} else {
 			eprintln!("❌ Warning: Could not delete any backup sets (preserving last backup)");
