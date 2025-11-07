@@ -117,7 +117,7 @@ fn ensure_space_for_file(
 		// Insufficient space - need to delete one old backup
 		context.stats.clear_progress_line();
 		eprintln!(
-			"Insufficient space for file (need {}, have {}), auto-deleting old backup...",
+			"⚠️ Insufficient space for file (need {}, have {}), auto-deleting old backup...",
 			bytesize::ByteSize(file_size),
 			bytesize::ByteSize(available)
 		);
@@ -130,11 +130,11 @@ fn ensure_space_for_file(
 
 		// Delete the selected set
 		if let Some(set) = to_delete {
-			eprintln!("Deleting backup set: {}", set.name);
+			eprintln!("🗑️ Deleting backup set: {}", set.name);
 			set_manager::delete_backup_set(&set.path)?;
 			eprintln!("Deleted backup set, resuming copy...");
 		} else {
-			eprintln!("Warning: Could not delete any backup sets (preserving last backup)");
+			eprintln!("❌ Warning: Could not delete any backup sets (preserving last backup)");
 		}
 
 		context.stats.update_progress_display();
