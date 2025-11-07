@@ -60,8 +60,15 @@ pub fn calculate_deletion_weight(time_span_days: f64, exponent: f64) -> f64 {
 }
 
 /// Select one backup set to delete using weighted random distribution
-/// Returns the selected set, or None if no sets can be deleted
-/// Always preserves at least one backup set (the most recent)
+///
+/// Implements weighted algorithm from https://en.wikipedia.org/wiki/Backup_rotation_scheme
+/// based on time spans between backups. Older backups with larger gaps before them
+/// have higher deletion probability.
+///
+/// Returns the selected set, or None if no sets can be deleted.
+/// Always preserves at least one backup set (the most recent for hard-linking).
+///
+/// See doc/adr/0004-automatic-space-management-and-testing-strategy.md
 pub fn select_set_to_delete<R: rand::Rng>(
 	sets: &[BackupSetInfo],
 	rng: &mut R,
