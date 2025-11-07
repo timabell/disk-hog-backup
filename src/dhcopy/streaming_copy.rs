@@ -101,11 +101,10 @@ fn ensure_space_for_file(
 	context: &mut BackupContext,
 ) -> io::Result<()> {
 	use crate::backup_sets::set_manager;
-	use crate::disk_space::{RealSpaceChecker, SpaceChecker};
+	use crate::disk_space;
 
 	// Get available space on the destination
-	let space_checker = RealSpaceChecker;
-	let available = space_checker.get_available_space(backup_root)?;
+	let available = disk_space::get_disk_space(backup_root)?.available;
 
 	// Check if there's enough space for this file
 	if available < file_size {
