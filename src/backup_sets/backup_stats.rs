@@ -679,21 +679,13 @@ impl BackupStats {
 		}
 	}
 
-	/// Update the progress display on stderr (overwrites same line)
-	pub fn update_progress_display(&self) {
-		if !self.inner.is_terminal {
-			return;
-		}
-
-		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
-			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+	fn format_progress_display(total_bytes: u64, processed: u64, elapsed: Duration) -> String {
 		let processed_gb = processed as f64 / 1_000_000_000.0;
-		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
-		let elapsed = self.elapsed();
+		let total_gb = total_bytes as f64 / 1_000_000_000.0;
 		let elapsed_str = Self::format_duration(elapsed);
 
-		if self.inner.total_bytes > 0 && processed > 0 {
-			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+		if total_bytes > 0 && processed > 0 {
+			let percentage = (processed as f64 / total_bytes as f64) * 100.0;
 
 			// Calculate rate and format with appropriate units
 			let elapsed_secs = elapsed.as_secs_f64();
@@ -709,7 +701,7 @@ impl BackupStats {
 			};
 
 			// Calculate remaining time and ETA
-			let remaining_bytes = self.inner.total_bytes - processed;
+			let remaining_bytes = total_bytes - processed;
 			let remaining_secs = remaining_bytes as f64 / rate;
 			let remaining = Duration::from_secs_f64(remaining_secs);
 			let remaining_str = Self::format_duration(remaining);
@@ -719,22 +711,37 @@ impl BackupStats {
 				chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
 			let eta_str = eta_timestamp.format("%H:%M:%S").to_string();
 
-			eprint!(
+			format!(
 				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) @ {} | Time: elapsed {}, remaining {}, ETA {}",
 				processed_gb, total_gb, percentage, rate_str, elapsed_str, remaining_str, eta_str
-			);
-		} else if self.inner.total_bytes > 0 {
-			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
-			eprint!(
+			)
+		} else if total_bytes > 0 {
+			let percentage = (processed as f64 / total_bytes as f64) * 100.0;
+			format!(
 				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) | Time: {}",
 				processed_gb, total_gb, percentage, elapsed_str
-			);
+			)
 		} else {
-			eprint!(
+			format!(
 				"\rProgress: {:.2}GB processed - {}",
 				processed_gb, elapsed_str
-			);
+			)
 		}
+	}
+
+	/// Update the progress display on stderr (overwrites same line)
+	pub fn update_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
+			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+
+		eprint!(
+			"{}",
+			Self::format_progress_display(self.inner.total_bytes, processed, self.elapsed())
+		);
 	}
 
 	/// Clear the progress display line before printing a log message
