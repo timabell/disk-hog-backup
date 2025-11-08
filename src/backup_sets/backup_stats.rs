@@ -67,6 +67,9 @@ struct BackupStatsInner {
 
 	// Auto-deleted backup sets (mutable, protected by Mutex)
 	deleted_sets: Mutex<Vec<String>>,
+
+	// Vanished files (disappeared during processing)
+	vanished_files: Mutex<Vec<PathBuf>>,
 }
 
 struct DiskSpaceInfo {
@@ -133,6 +136,7 @@ impl BackupStats {
 					md5_store_size: None,
 				}),
 				deleted_sets: Mutex::new(Vec::new()),
+				vanished_files: Mutex::new(Vec::new()),
 			}),
 		}
 	}
@@ -318,6 +322,25 @@ impl BackupStats {
 	pub fn add_deleted_set(&self, set_name: String) {
 		if let Ok(mut deleted_sets) = self.inner.deleted_sets.lock() {
 			deleted_sets.push(set_name);
+		}
+	}
+
+	/// Record that a file vanished during processing
+	pub fn add_vanished_file(&self, path: PathBuf) {
+		if let Ok(mut vanished_files) = self.inner.vanished_files.lock() {
+			vanished_files.push(path);
+		}
+	}
+
+	/// Print warning about vanished files (call after stats summary)
+	pub fn print_vanished_files(&self) {
+		if let Ok(vanished) = self.inner.vanished_files.lock()
+			&& !vanished.is_empty()
+		{
+			eprintln!("\nWarning: The following paths vanished during processing");
+			for path in vanished.iter() {
+				eprintln!("{}", path.display());
+			}
 		}
 	}
 

@@ -168,7 +168,15 @@ pub fn copy_file_with_streaming(
 	backup_root: &str,
 	current_backup_set: &Path,
 ) -> io::Result<bool> {
-	let src_metadata = src_path.metadata()?;
+	let src_metadata = match src_path.metadata() {
+		Ok(m) => m,
+		Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+			// File vanished before we could copy it
+			context.stats.add_vanished_file(src_path.to_path_buf());
+			return Ok(false); // Indicate file was skipped (not hardlinked)
+		}
+		Err(e) => return Err(e),
+	};
 	let file_size = src_metadata.len();
 
 	// Just-in-time space check if auto-delete is enabled
@@ -201,7 +209,7 @@ pub fn copy_file_with_streaming(
 	if hardlinked {
 		context.stats.add_file_hardlinked(file_size);
 	} else {
-		copy_file_metadata(src_path, dst_path)?;
+		copy_file_metadata(src_path, dst_path, &context.stats)?;
 		context.stats.add_file_copied(file_size);
 	}
 
@@ -285,8 +293,17 @@ fn files_match_by_mtime(
 }
 
 // Helper function to copy file metadata (timestamps, permissions)
-fn copy_file_metadata(src_path: &Path, dst_path: &Path) -> io::Result<()> {
-	let src_metadata = fs::metadata(src_path)?;
+// Note: Takes BackupStats to track vanished files
+fn copy_file_metadata(src_path: &Path, dst_path: &Path, stats: &BackupStats) -> io::Result<()> {
+	let src_metadata = match fs::metadata(src_path) {
+		Ok(m) => m,
+		Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+			// File vanished after copy - file was modified during backup
+			stats.add_vanished_file(src_path.to_path_buf());
+			return Ok(());
+		}
+		Err(e) => return Err(e),
+	};
 
 	// Copy file permissions
 	#[cfg(unix)]
@@ -369,7 +386,18 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 	if let Some(prev) = previous_file
 		&& let Some(prev_p) = prev_path
 	{
-		let src_metadata = src_path.metadata()?;
+		let src_metadata = match src_path.metadata() {
+			Ok(m) => m,
+			Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+				// File vanished during hardlink check - track and return error
+				stats.add_vanished_file(src_path.to_path_buf());
+				return Err(io::Error::new(
+					io::ErrorKind::NotFound,
+					"Source file vanished",
+				));
+			}
+			Err(e) => return Err(e),
+		};
 		let prev_metadata = prev_p.metadata()?;
 
 		// Check if size matches
@@ -403,9 +431,10 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 
 	// Create bounded channels
 	// Use Arc to share chunks between writer and hasher without cloning data
-	let (writer_tx, writer_rx) = bounded::<Arc<Vec<u8>>>(MAX_QUEUE_CHUNKS);
-	let (hasher_tx, hasher_rx) = bounded::<Arc<Vec<u8>>>(MAX_QUEUE_CHUNKS);
-	let (md5_tx, md5_rx) = bounded(1);
+	// Channels carry Result to propagate I/O errors from threads
+	let (writer_tx, writer_rx) = bounded::<Result<Arc<Vec<u8>>, io::Error>>(MAX_QUEUE_CHUNKS);
+	let (hasher_tx, hasher_rx) = bounded::<Result<Arc<Vec<u8>>, io::Error>>(MAX_QUEUE_CHUNKS);
+	let (md5_tx, md5_rx) = bounded::<Result<[u8; 16], io::Error>>(1);
 
 	let global_memory = &GLOBAL_MEMORY_USAGE;
 	let cancel_write = Arc::new(AtomicBool::new(false));
@@ -454,7 +483,7 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 	// Receive computed MD5 from channel (hasher already sent it)
 	let computed_md5 = md5_rx
 		.recv()
-		.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "MD5 channel closed"))?;
+		.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "MD5 channel closed"))??; // Double ? to unwrap Result<Result<T, E>, E>
 
 	// Compare with expected MD5 and decide on cancellation
 	let files_match = expected_md5 == Some(computed_md5);
@@ -482,7 +511,7 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 		create_hardlink(prev, dst_path)?;
 		// If mtime changed, update the metadata on the hardlinked file
 		if mtime_changed {
-			copy_file_metadata(src_path, dst_path)?;
+			copy_file_metadata(src_path, dst_path, stats)?;
 		}
 		return Ok((true, src_hash));
 	}
@@ -493,18 +522,45 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 // Reader thread: reads source file in chunks and sends to both writer and hasher
 fn reader_thread(
 	src_path: &Path,
-	writer_tx: Sender<Arc<Vec<u8>>>,
-	hasher_tx: Sender<Arc<Vec<u8>>>,
+	writer_tx: Sender<Result<Arc<Vec<u8>>, io::Error>>,
+	hasher_tx: Sender<Result<Arc<Vec<u8>>, io::Error>>,
 	global_memory: &AtomicUsize,
 	stats: &BackupStats,
 ) -> io::Result<()> {
-	let mut file = File::open(src_path)?;
+	let mut file = match File::open(src_path) {
+		Ok(f) => f,
+		Err(e) => {
+			// Track vanished files, send other errors to channels
+			if e.kind() == io::ErrorKind::NotFound {
+				stats.add_vanished_file(src_path.to_path_buf());
+			} else {
+				// Send non-NotFound error to both channels
+				// Recreate error because io::Error doesn't implement Clone
+				let kind = e.kind();
+				let msg = e.to_string();
+				let _ = writer_tx.send(Err(io::Error::new(kind, msg.clone())));
+				let _ = hasher_tx.send(Err(io::Error::new(kind, msg)));
+			}
+			return Ok(()); // Exit thread gracefully
+		}
+	};
 	let mut buffer = vec![0; CHUNK_SIZE];
 
 	loop {
 		// 1. Time read I/O
 		let start = std::time::Instant::now();
-		let bytes_read = file.read(&mut buffer)?;
+		let bytes_read = match file.read(&mut buffer) {
+			Ok(n) => n,
+			Err(e) => {
+				// Send error to both channels and exit thread
+				// Recreate error because io::Error doesn't implement Clone
+				let kind = e.kind();
+				let msg = e.to_string();
+				let _ = writer_tx.send(Err(io::Error::new(kind, msg.clone())));
+				let _ = hasher_tx.send(Err(io::Error::new(kind, msg)));
+				return Ok(()); // Exit thread gracefully
+			}
+		};
 		stats.add_reader_io_time(start.elapsed().as_nanos() as u64);
 
 		if bytes_read == 0 {
@@ -539,7 +595,7 @@ fn reader_thread(
 
 		// 4. Time send to writer channel
 		let start = std::time::Instant::now();
-		if writer_tx.send(Arc::clone(&chunk)).is_err() {
+		if writer_tx.send(Ok(Arc::clone(&chunk))).is_err() {
 			return Err(io::Error::new(
 				io::ErrorKind::BrokenPipe,
 				"Writer channel closed",
@@ -549,7 +605,7 @@ fn reader_thread(
 
 		// 5. Time send to hasher channel
 		let start = std::time::Instant::now();
-		if hasher_tx.send(chunk).is_err() {
+		if hasher_tx.send(Ok(chunk)).is_err() {
 			return Err(io::Error::new(
 				io::ErrorKind::BrokenPipe,
 				"Hasher channel closed",
@@ -563,8 +619,8 @@ fn reader_thread(
 
 // Hasher thread: receives chunks and computes MD5
 fn hasher_thread(
-	data_rx: Receiver<Arc<Vec<u8>>>,
-	md5_tx: Sender<[u8; 16]>,
+	data_rx: Receiver<Result<Arc<Vec<u8>>, io::Error>>,
+	md5_tx: Sender<Result<[u8; 16], io::Error>>,
 	stats: &BackupStats,
 ) -> io::Result<[u8; 16]> {
 	let mut context = Context::new();
@@ -572,9 +628,22 @@ fn hasher_thread(
 	// Track receive time by iterating manually
 	let mut recv_start = std::time::Instant::now();
 
-	for chunk in data_rx {
+	for result in data_rx {
 		// 1. Time blocked on receive
 		stats.add_hasher_recv_time(recv_start.elapsed().as_nanos() as u64);
+
+		// Handle errors from reader
+		let chunk = match result {
+			Ok(chunk) => chunk,
+			Err(e) => {
+				// Propagate error to MD5 channel and return from thread
+				// Recreate error because io::Error doesn't implement Clone
+				let kind = e.kind();
+				let msg = e.to_string();
+				let _ = md5_tx.send(Err(io::Error::new(kind, msg.clone())));
+				return Err(io::Error::new(kind, msg));
+			}
+		};
 
 		stats.add_hashed(chunk.len() as u64);
 
@@ -590,7 +659,7 @@ fn hasher_thread(
 	let digest = context.finalize();
 
 	md5_tx
-		.send(digest.0)
+		.send(Ok(digest.0))
 		.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "MD5 channel closed"))?;
 
 	Ok(digest.0)
@@ -599,7 +668,7 @@ fn hasher_thread(
 // Writer thread: receives chunks and writes them to destination
 fn writer_thread(
 	dst_path: &Path,
-	data_rx: Receiver<Arc<Vec<u8>>>,
+	data_rx: Receiver<Result<Arc<Vec<u8>>, io::Error>>,
 	cancel_write: Arc<AtomicBool>,
 	global_memory: &AtomicUsize,
 	stats: &BackupStats,
@@ -609,9 +678,18 @@ fn writer_thread(
 	// Track receive time by iterating manually
 	let mut recv_start = std::time::Instant::now();
 
-	for chunk in data_rx {
+	for result in data_rx {
 		// 1. Time blocked on receive
 		stats.add_writer_recv_time(recv_start.elapsed().as_nanos() as u64);
+
+		// Handle errors from reader
+		let chunk = match result {
+			Ok(chunk) => chunk,
+			Err(e) => {
+				// Error from reader - propagate
+				return Err(e);
+			}
+		};
 
 		// Check cancellation flag
 		if cancel_write.load(Ordering::SeqCst) {

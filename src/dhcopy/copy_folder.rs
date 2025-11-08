@@ -188,6 +188,7 @@ pub fn backup_folder(
 
 	context.save_stats()?;
 	context.print_stats_summary();
+	context.stats.print_vanished_files();
 
 	Ok(())
 }
@@ -329,7 +330,16 @@ fn process_directory_recursive(
 			}
 
 			// Output the full path of the file being processed with size
-			let file_size = entry_path.metadata()?.len();
+			let metadata = match entry_path.metadata() {
+				Ok(m) => m,
+				Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+					// File vanished between directory scan and processing
+					context.stats.add_vanished_file(entry_path.to_path_buf());
+					continue;
+				}
+				Err(e) => return Err(e),
+			};
+			let file_size = metadata.len();
 			context.stats.clear_progress_line();
 			eprintln!(
 				"Processing: {} ({})",
