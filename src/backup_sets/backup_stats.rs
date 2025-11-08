@@ -679,21 +679,13 @@ impl BackupStats {
 		}
 	}
 
-	/// Update the progress display on stderr (overwrites same line)
-	pub fn update_progress_display(&self) {
-		if !self.inner.is_terminal {
-			return;
-		}
-
-		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
-			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+	fn format_progress_display(total_bytes: u64, processed: u64, elapsed: Duration) -> String {
 		let processed_gb = processed as f64 / 1_000_000_000.0;
-		let total_gb = self.inner.total_bytes as f64 / 1_000_000_000.0;
-		let elapsed = self.elapsed();
+		let total_gb = total_bytes as f64 / 1_000_000_000.0;
 		let elapsed_str = Self::format_duration(elapsed);
 
-		if self.inner.total_bytes > 0 && processed > 0 {
-			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
+		if total_bytes > 0 && processed > 0 {
+			let percentage = (processed as f64 / total_bytes as f64) * 100.0;
 
 			// Calculate rate and format with appropriate units
 			let elapsed_secs = elapsed.as_secs_f64();
@@ -709,7 +701,7 @@ impl BackupStats {
 			};
 
 			// Calculate remaining time and ETA
-			let remaining_bytes = self.inner.total_bytes - processed;
+			let remaining_bytes = total_bytes.saturating_sub(processed);
 			let remaining_secs = remaining_bytes as f64 / rate;
 			let remaining = Duration::from_secs_f64(remaining_secs);
 			let remaining_str = Self::format_duration(remaining);
@@ -719,22 +711,37 @@ impl BackupStats {
 				chrono::Local::now() + chrono::Duration::from_std(remaining).unwrap();
 			let eta_str = eta_timestamp.format("%H:%M:%S").to_string();
 
-			eprint!(
+			format!(
 				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) @ {} | Time: elapsed {}, remaining {}, ETA {}",
 				processed_gb, total_gb, percentage, rate_str, elapsed_str, remaining_str, eta_str
-			);
-		} else if self.inner.total_bytes > 0 {
-			let percentage = (processed as f64 / self.inner.total_bytes as f64) * 100.0;
-			eprint!(
+			)
+		} else if total_bytes > 0 {
+			let percentage = (processed as f64 / total_bytes as f64) * 100.0;
+			format!(
 				"\rProgress: {:.2}GB of {:.2}GB ({:.1}%) | Time: {}",
 				processed_gb, total_gb, percentage, elapsed_str
-			);
+			)
 		} else {
-			eprint!(
+			format!(
 				"\rProgress: {:.2}GB processed - {}",
 				processed_gb, elapsed_str
-			);
+			)
 		}
+	}
+
+	/// Update the progress display on stderr (overwrites same line)
+	pub fn update_progress_display(&self) {
+		if !self.inner.is_terminal {
+			return;
+		}
+
+		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
+			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+
+		eprint!(
+			"{}",
+			Self::format_progress_display(self.inner.total_bytes, processed, self.elapsed())
+		);
 	}
 
 	/// Clear the progress display line before printing a log message
@@ -973,5 +980,56 @@ mod tests {
 			BackupStats::format_duration(Duration::from_millis(3_665_123)),
 			"01:01:05.123"
 		);
+	}
+
+	#[test]
+	fn test_format_progress_display_with_rate_and_eta() {
+		// Full progress display: has total, has processed
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 500_000_000; // 500 MB
+		let elapsed = Duration::from_secs(2);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		// Rate: 500MB / 2s = 250MB/s
+		// Remaining: 500MB at 250MB/s = 2s
+		// ETA will be current time + 2s (we can't test exact time, just format)
+		assert!(result.starts_with("\rProgress: 0.50GB of 1.00GB (50.0%) @ 250.00MB/s | Time: elapsed 00:00:02.000, remaining 00:00:02.000, ETA "));
+	}
+
+	#[test]
+	fn test_format_progress_display_no_processed_yet() {
+		// Has total but no processed data yet
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 0;
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		assert_eq!(result, "\rProgress: 0.00GB of 1.00GB (0.0%) | Time: 00:00:01.000");
+	}
+
+	#[test]
+	fn test_format_progress_display_no_total() {
+		// No total size known, just show processed
+		let total_bytes: u64 = 0;
+		let processed: u64 = 500_000_000; // 500 MB
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		assert_eq!(result, "\rProgress: 0.50GB processed - 00:00:01.000");
+	}
+
+	#[test]
+	fn test_format_progress_display_processed_more_than_expected() {
+		// Reproduces https://github.com/timabell/disk-hog-backup/issues/83
+		// processed > total (files grew during backup)
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 1_500_000_000; // 1.5 GB (more than total!)
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		// Should show 150% and 0 remaining time (saturating_sub gives 0)
+		// Rate: 1.5GB / 1s = 1.5GB/s
+		// Remaining: 0 bytes (saturating_sub)
+		assert!(result.starts_with("\rProgress: 1.50GB of 1.00GB (150.0%) @ 1.50GB/s | Time: elapsed 00:00:01.000, remaining 00:00:00.000, ETA "));
 	}
 }
