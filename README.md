@@ -198,3 +198,4 @@ The `.dhbignore` file supports the following pattern syntax:
 
 * [Outside-in-tests](https://pod.0x5.uk/25)
 * [Architecture Decision Records (ADRs)](doc/adr/)
+* [Threading Architecture](doc/threading.md) - Multi-threaded pipeline design for backup operations
