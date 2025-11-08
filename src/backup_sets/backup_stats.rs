@@ -1004,7 +1004,10 @@ mod tests {
 		let elapsed = Duration::from_secs(1);
 
 		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
-		assert_eq!(result, "\rProgress: 0.00GB of 1.00GB (0.0%) | Time: 00:00:01.000");
+		assert_eq!(
+			result,
+			"\rProgress: 0.00GB of 1.00GB (0.0%) | Time: 00:00:01.000"
+		);
 	}
 
 	#[test]
