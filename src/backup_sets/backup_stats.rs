@@ -981,4 +981,52 @@ mod tests {
 			"01:01:05.123"
 		);
 	}
+
+	#[test]
+	fn test_format_progress_display_with_rate_and_eta() {
+		// Full progress display: has total, has processed
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 500_000_000; // 500 MB
+		let elapsed = Duration::from_secs(2);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		// Rate: 500MB / 2s = 250MB/s
+		// Remaining: 500MB at 250MB/s = 2s
+		// ETA will be current time + 2s (we can't test exact time, just format)
+		assert!(result.starts_with("\rProgress: 0.50GB of 1.00GB (50.0%) @ 250.00MB/s | Time: elapsed 00:00:02.000, remaining 00:00:02.000, ETA "));
+	}
+
+	#[test]
+	fn test_format_progress_display_no_processed_yet() {
+		// Has total but no processed data yet
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 0;
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		assert_eq!(result, "\rProgress: 0.00GB of 1.00GB (0.0%) | Time: 00:00:01.000");
+	}
+
+	#[test]
+	fn test_format_progress_display_no_total() {
+		// No total size known, just show processed
+		let total_bytes: u64 = 0;
+		let processed: u64 = 500_000_000; // 500 MB
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		assert_eq!(result, "\rProgress: 0.50GB processed - 00:00:01.000");
+	}
+
+	#[test]
+	fn test_format_progress_display_processed_more_than_expected() {
+		// Reproduces https://github.com/timabell/disk-hog-backup/issues/83
+		// processed > total (files grew during backup)
+		let total_bytes: u64 = 1_000_000_000; // 1 GB
+		let processed: u64 = 1_500_000_000; // 1.5 GB (more than total!)
+		let elapsed = Duration::from_secs(1);
+
+		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
+		assert!(result.contains("Progress:"));
+	}
 }
