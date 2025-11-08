@@ -795,7 +795,7 @@ fn test_backup_skips_special_files() -> io::Result<()> {
 }
 
 fn disk_hog_backup_cmd() -> Command {
-	Command::cargo_bin("disk-hog-backup").expect("failed to find binary")
+	Command::new(assert_cmd::cargo::cargo_bin!("disk-hog-backup"))
 }
 
 pub fn create_tmp_folder(prefix: &str) -> io::Result<String> {
