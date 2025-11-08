@@ -701,7 +701,7 @@ impl BackupStats {
 			};
 
 			// Calculate remaining time and ETA
-			let remaining_bytes = total_bytes - processed;
+			let remaining_bytes = total_bytes.saturating_sub(processed);
 			let remaining_secs = remaining_bytes as f64 / rate;
 			let remaining = Duration::from_secs_f64(remaining_secs);
 			let remaining_str = Self::format_duration(remaining);
@@ -1027,6 +1027,9 @@ mod tests {
 		let elapsed = Duration::from_secs(1);
 
 		let result = BackupStats::format_progress_display(total_bytes, processed, elapsed);
-		assert!(result.contains("Progress:"));
+		// Should show 150% and 0 remaining time (saturating_sub gives 0)
+		// Rate: 1.5GB / 1s = 1.5GB/s
+		// Remaining: 0 bytes (saturating_sub)
+		assert!(result.starts_with("\rProgress: 1.50GB of 1.00GB (150.0%) @ 1.50GB/s | Time: elapsed 00:00:01.000, remaining 00:00:00.000, ETA "));
 	}
 }
