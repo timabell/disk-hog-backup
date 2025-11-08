@@ -596,20 +596,18 @@ fn reader_thread(
 		// 4. Time send to writer channel
 		let start = std::time::Instant::now();
 		if writer_tx.send(Ok(Arc::clone(&chunk))).is_err() {
-			return Err(io::Error::new(
-				io::ErrorKind::BrokenPipe,
-				"Writer channel closed",
-			));
+			// Writer closed (likely due to error) - stop reading gracefully
+			// Writer's error will propagate through its join
+			return Ok(());
 		}
 		stats.add_reader_send_writer_time(start.elapsed().as_nanos() as u64);
 
 		// 5. Time send to hasher channel
 		let start = std::time::Instant::now();
 		if hasher_tx.send(Ok(chunk)).is_err() {
-			return Err(io::Error::new(
-				io::ErrorKind::BrokenPipe,
-				"Hasher channel closed",
-			));
+			// Hasher closed (likely due to error from reader) - stop reading gracefully
+			// Hasher's error will propagate through its join
+			return Ok(());
 		}
 		stats.add_reader_send_hasher_time(start.elapsed().as_nanos() as u64);
 	}

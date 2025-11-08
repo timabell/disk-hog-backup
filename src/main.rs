@@ -35,7 +35,7 @@ fn main() {
 	match backup(&args.source, &args.destination, args.auto_delete) {
 		Ok(_) => (),
 		Err(e) => {
-			eprintln!("Backup failed: {}", e);
+			eprintln!("\nBackup failed: {}", e);
 			process::exit(1);
 		}
 	}
