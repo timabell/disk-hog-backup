@@ -189,6 +189,7 @@ pub fn backup_folder(
 	context.save_stats()?;
 	context.print_stats_summary();
 	context.stats.print_vanished_files();
+	context.stats.print_inaccessible_files();
 
 	Ok(())
 }
@@ -238,8 +239,39 @@ fn process_directory_recursive(
 	auto_delete_config: &AutoDeleteConfig,
 ) -> io::Result<()> {
 	// Read the directory entries
-	for entry in fs::read_dir(current_path)? {
-		let entry = entry?;
+	let entries = match fs::read_dir(current_path) {
+		Ok(entries) => entries,
+		Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+			// Directory is inaccessible - log and continue
+			context
+				.stats
+				.add_inaccessible_file(current_path.to_path_buf());
+			context.stats.clear_progress_line();
+			eprintln!(
+				"Skipping inaccessible directory (permission denied): {}",
+				current_path.display()
+			);
+			context.stats.update_progress_display();
+			return Ok(());
+		}
+		Err(e) => return Err(e),
+	};
+
+	for entry in entries {
+		let entry = match entry {
+			Ok(e) => e,
+			Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+				// Entry is inaccessible - log and continue to next entry
+				context.stats.clear_progress_line();
+				eprintln!(
+					"Skipping inaccessible entry in {} (permission denied)",
+					current_path.display()
+				);
+				context.stats.update_progress_display();
+				continue;
+			}
+			Err(e) => return Err(e),
+		};
 		let entry_path = entry.path();
 
 		// Check if this entry should be ignored
@@ -266,7 +298,22 @@ fn process_directory_recursive(
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::FileTypeExt;
-			let file_type = entry.file_type()?;
+			let file_type = match entry.file_type() {
+				Ok(ft) => ft,
+				Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+					context
+						.stats
+						.add_inaccessible_file(entry_path.to_path_buf());
+					context.stats.clear_progress_line();
+					eprintln!(
+						"Skipping inaccessible file (permission denied): {}",
+						entry_path.display()
+					);
+					context.stats.update_progress_display();
+					continue;
+				}
+				Err(e) => return Err(e),
+			};
 			if file_type.is_fifo()
 				|| file_type.is_socket()
 				|| file_type.is_block_device()
@@ -285,7 +332,22 @@ fn process_directory_recursive(
 		}
 
 		if entry_path.is_symlink() {
-			let target = fs::read_link(&entry_path)?;
+			let target = match fs::read_link(&entry_path) {
+				Ok(t) => t,
+				Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+					context
+						.stats
+						.add_inaccessible_file(entry_path.to_path_buf());
+					context.stats.clear_progress_line();
+					eprintln!(
+						"Skipping inaccessible symlink (permission denied): {}",
+						entry_path.display()
+					);
+					context.stats.update_progress_display();
+					continue;
+				}
+				Err(e) => return Err(e),
+			};
 
 			#[cfg(unix)]
 			symlink(&target, &entry_dest_path)?;
@@ -337,6 +399,19 @@ fn process_directory_recursive(
 					context.stats.add_vanished_file(entry_path.to_path_buf());
 					continue;
 				}
+				Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+					// File is inaccessible
+					context
+						.stats
+						.add_inaccessible_file(entry_path.to_path_buf());
+					context.stats.clear_progress_line();
+					eprintln!(
+						"Skipping inaccessible file (permission denied): {}",
+						entry_path.display()
+					);
+					context.stats.update_progress_display();
+					continue;
+				}
 				Err(e) => return Err(e),
 			};
 			let file_size = metadata.len();
@@ -349,7 +424,7 @@ fn process_directory_recursive(
 			context.stats.update_progress_display();
 
 			// Copy the file with streaming
-			copy_file_with_streaming(
+			if let Err(e) = copy_file_with_streaming(
 				&entry_path,
 				&entry_dest_path,
 				prev_backup_path.as_deref(),
@@ -358,7 +433,21 @@ fn process_directory_recursive(
 				auto_delete_config.enabled,
 				auto_delete_config.backup_root,
 				dest_path,
-			)?;
+			) {
+				if e.kind() == io::ErrorKind::PermissionDenied {
+					context
+						.stats
+						.add_inaccessible_file(entry_path.to_path_buf());
+					context.stats.clear_progress_line();
+					eprintln!(
+						"Skipping inaccessible file (permission denied): {}",
+						entry_path.display()
+					);
+					context.stats.update_progress_display();
+					continue;
+				}
+				return Err(e);
+			}
 		}
 	}
 

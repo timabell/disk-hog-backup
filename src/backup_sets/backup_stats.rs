@@ -70,6 +70,9 @@ struct BackupStatsInner {
 
 	// Vanished files (disappeared during processing)
 	vanished_files: Mutex<Vec<PathBuf>>,
+
+	// Inaccessible files (permission denied during processing)
+	inaccessible_files: Mutex<Vec<PathBuf>>,
 }
 
 struct DiskSpaceInfo {
@@ -137,6 +140,7 @@ impl BackupStats {
 				}),
 				deleted_sets: Mutex::new(Vec::new()),
 				vanished_files: Mutex::new(Vec::new()),
+				inaccessible_files: Mutex::new(Vec::new()),
 			}),
 		}
 	}
@@ -340,6 +344,28 @@ impl BackupStats {
 			eprintln!("\nWarning: The following paths vanished during processing");
 			for path in vanished.iter() {
 				eprintln!("{}", path.display());
+			}
+		}
+	}
+
+	/// Record that a file was inaccessible due to permission denied
+	pub fn add_inaccessible_file(&self, path: PathBuf) {
+		if let Ok(mut inaccessible_files) = self.inner.inaccessible_files.lock() {
+			inaccessible_files.push(path);
+		}
+	}
+
+	/// Print warning about inaccessible files (call after stats summary)
+	pub fn print_inaccessible_files(&self) {
+		if let Ok(inaccessible) = self.inner.inaccessible_files.lock()
+			&& !inaccessible.is_empty()
+		{
+			eprintln!(
+				"\nWarning: The following {} paths were inaccessible (permission denied):",
+				inaccessible.len()
+			);
+			for path in inaccessible.iter() {
+				eprintln!("  {}", path.display());
 			}
 		}
 	}

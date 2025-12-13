@@ -175,6 +175,13 @@ pub fn copy_file_with_streaming(
 			context.stats.add_vanished_file(src_path.to_path_buf());
 			return Ok(false); // Indicate file was skipped (not hardlinked)
 		}
+		Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+			// File is inaccessible - propagate error to be handled by caller
+			return Err(io::Error::new(
+				io::ErrorKind::PermissionDenied,
+				format!("Permission denied reading metadata: {}", src_path.display()),
+			));
+		}
 		Err(e) => return Err(e),
 	};
 	let file_size = src_metadata.len();
@@ -394,6 +401,13 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 				return Err(io::Error::new(
 					io::ErrorKind::NotFound,
 					"Source file vanished",
+				));
+			}
+			Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+				// File is inaccessible - propagate error to be handled by caller
+				return Err(io::Error::new(
+					io::ErrorKind::PermissionDenied,
+					format!("Permission denied reading metadata: {}", src_path.display()),
 				));
 			}
 			Err(e) => return Err(e),
