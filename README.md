@@ -203,3 +203,4 @@ The `.dhbignore` file supports the following pattern syntax:
 # Alternative tools
 
 * [rclone](https://github.com/rclone/rclone) - focus on cloud sync but can presumably do local too
+* [restic](https://github.com/restic/restic) - encrypted backups on local & cloud
