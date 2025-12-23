@@ -17,13 +17,15 @@
 	- Keeps as many backup versions as possible in available space
 	- Perfect for external USB drives and limited storage scenarios
 
-# Work in progress!
+# ⚠️ This is Beta software ⚠️
 
-⚠️ Experimental Alpha. Almost guaranteed to eat all your data currently. Use at
-own risk. Make backups before running this anywhere (irony alert). Please report issues at <https://github.com/timabell/disk-hog-backup/issues>
+I've been using this for my own backups for a while and verifying the backups against source hashes and previous backups, squashing bugs as I go, however this hasn't been widely tested by the community so you MUST ensure you have alternative and current backups before using this software.
 
-⚠️ This is far from finished, if you want something that already works take a look
-at [BackInTime](https://backintime.readthedocs.io/) ([BackInTime repo](https://github.com/bit-team/backintime))
+As per the A-GPL license (see sections 15 & 16) under which this software is licensed - this software is used entirely at your own risk and comes with no warranty/liability for correct behaviour or data loss.
+
+Please report any issues encountered at <https://github.com/timabell/disk-hog-backup/issues>
+
+It is recommended to follow at a minimum the [3-2-1 backup rule](https://en.wikipedia.org/wiki/Backup#3-2-1_Backup_Rule) to ensure the failure of a single source/backup cannot result in complete data loss, regardless of the backup tools you choose.
 
 # Usage
 
