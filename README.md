@@ -199,3 +199,7 @@ The `.dhbignore` file supports the following pattern syntax:
 * [Outside-in-tests](https://pod.0x5.uk/25)
 * [Architecture Decision Records (ADRs)](doc/adr/)
 * [Threading Architecture](doc/threading.md) - Multi-threaded pipeline design for backup operations
+
+# Alternative tools
+
+* [rclone](https://github.com/rclone/rclone) - focus on cloud sync but can presumably do local too
