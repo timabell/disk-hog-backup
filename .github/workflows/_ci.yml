@@ -15,7 +15,7 @@ jobs:
 #  vet:
 #    runs-on: ubuntu-latest
 #    steps:
-#    - uses: actions/checkout@v5
+#    - uses: actions/checkout@v6
 #    - name: Install cargo-vet
 #      run: cargo install cargo-vet
 #    - name: Verify Dependencies
@@ -24,7 +24,7 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - name: Install cargo-deny
       run: cargo install cargo-deny
     - name: Check Licenses
@@ -48,7 +48,7 @@ jobs:
 #            binary_name: disk-hog-backup
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - name: Install musl tools
       if: matrix.target == 'x86_64-unknown-linux-musl'
       run: |
@@ -78,7 +78,7 @@ jobs:
           tar -czvf ${{ matrix.artifact_name }}.tar.gz -C "target/${{ matrix.target }}/release" "${{ matrix.binary_name }}"
         fi
     - name: Upload Build Artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ matrix.artifact_name }}
         path: ${{ matrix.artifact_name }}.*

@@ -16,7 +16,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
@@ -28,17 +28,17 @@ jobs:
         args: --latest --strip header
 
     - name: Download Linux Build
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: disk-hog-backup-linux-x86_64
 
 #    - name: Download Windows Build
-#      uses: actions/download-artifact@v6
+#      uses: actions/download-artifact@v7
 #      with:
 #        name: disk-hog-backup-windows-x86_64
 #
 #    - name: Download macOS Build
-#      uses: actions/download-artifact@v6
+#      uses: actions/download-artifact@v7
 #      with:
 #        name: disk-hog-backup-macos-x86_64
 
