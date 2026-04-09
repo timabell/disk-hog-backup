@@ -25,8 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
+    - uses: Swatinem/rust-cache@v2
     - name: Install cargo-deny
-      run: cargo install cargo-deny
+      run: cargo install cargo-deny --locked
     - name: Check Licenses
       run: cargo deny check licenses
 
@@ -56,6 +57,9 @@ jobs:
         sudo apt-get install -y musl-tools
     - name: Add Target
       run: rustup target add ${{ matrix.target }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
     - name: Update Version (Linux/Windows)
       if: inputs.release_tag != '' && matrix.os != 'macos-latest'
       shell: bash
