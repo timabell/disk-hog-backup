@@ -42,7 +42,7 @@ impl BackupContext {
 	) -> Self {
 		BackupContext {
 			prev_md5_store: None,
-			new_md5_store: Md5Store::new(backup_root),
+			new_md5_store: Md5Store::new(backup_root, session_id),
 			stats: BackupStats::new(
 				backup_root,
 				session_id,
@@ -63,7 +63,7 @@ impl BackupContext {
 		initial_disk_space: Option<DiskSpace>,
 	) -> io::Result<Self> {
 		let prev_md5_store = Md5Store::load_from_backup(prev_backup)?;
-		let new_md5_store = Md5Store::new(backup_root);
+		let new_md5_store = Md5Store::new(backup_root, session_id);
 		let stats = BackupStats::new(
 			backup_root,
 			session_id,
@@ -82,6 +82,11 @@ impl BackupContext {
 
 	pub fn save_md5_store(&self) -> io::Result<()> {
 		self.new_md5_store.save()
+	}
+
+	/// Returns the path where the MD5 file will be saved.
+	pub fn md5_file_path(&self) -> std::path::PathBuf {
+		self.new_md5_store.md5_file_path()
 	}
 
 	pub fn save_stats(&self) -> io::Result<()> {

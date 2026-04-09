@@ -9,16 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Returns the path to the stats file for a backup set.
-/// The stats file is stored in the parent directory, named after the backup folder.
-/// e.g., for backup_root `/dest/dhb-set-20260329-084109`, returns `/dest/dhb-set-20260329-084109-stats.txt`
-fn get_stats_file_path(backup_root: &Path) -> PathBuf {
-	let parent = backup_root
-		.parent()
-		.expect("backup root must have parent directory");
-	let folder_name = backup_root
-		.file_name()
-		.expect("backup root must have a folder name");
-	parent.join(format!("{}-stats.txt", folder_name.to_string_lossy()))
+/// The stats file is stored in the output directory, named after the session_id.
+/// e.g., for output_dir `/dest` and session_id `dhb-set-20260329-084109`,
+/// returns `/dest/dhb-set-20260329-084109-stats.txt`
+fn get_stats_file_path(output_dir: &Path, session_id: &str) -> PathBuf {
+	output_dir.join(format!("{}-stats.txt", session_id))
 }
 
 /// Statistics for a backup operation, designed to be thread-safe for parallel processing
@@ -42,7 +37,9 @@ struct BackupStatsInner {
 	bytes_target_read: AtomicU64,
 	bytes_target_written: AtomicU64,
 	bytes_hashed: AtomicU64,
-	backup_root: PathBuf,
+	/// Directory where stats file is stored (parent of backup set folder)
+	output_dir: PathBuf,
+	/// Session ID used for naming the stats file (e.g., "dhb-set-20260329-084109")
 	session_id: String,
 
 	// Pipeline timing (nanoseconds) - cumulative across all files
@@ -93,7 +90,9 @@ struct DiskSpaceInfo {
 }
 
 impl BackupStats {
-	/// Create a new BackupStats instance for tracking backup statistics
+	/// Create a new BackupStats instance for tracking backup statistics.
+	/// `backup_root` is the backup set folder path (used to derive output directory).
+	/// `session_id` is the final name for the stats file (without wip_ prefix).
 	pub fn new(
 		backup_root: &Path,
 		session_id: &str,
@@ -101,6 +100,10 @@ impl BackupStats {
 		size_calc_duration: Duration,
 		initial_disk_space: Option<DiskSpace>,
 	) -> Self {
+		let output_dir = backup_root
+			.parent()
+			.expect("backup root must have parent directory")
+			.to_path_buf();
 		BackupStats {
 			inner: Arc::new(BackupStatsInner {
 				start_time: Instant::now(),
@@ -117,7 +120,7 @@ impl BackupStats {
 				bytes_target_read: AtomicU64::new(0),
 				bytes_target_written: AtomicU64::new(0),
 				bytes_hashed: AtomicU64::new(0),
-				backup_root: backup_root.to_path_buf(),
+				output_dir,
 				session_id: session_id.to_string(),
 
 				// Pipeline timing
@@ -222,6 +225,12 @@ impl BackupStats {
 		self.inner
 			.files_hash_changed
 			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Get total number of files processed (copied + hardlinked)
+	pub fn files_processed(&self) -> usize {
+		self.inner.files_copied.load(Ordering::Relaxed)
+			+ self.inner.files_hardlinked.load(Ordering::Relaxed)
 	}
 
 	/// Get the current elapsed time since backup started
@@ -503,7 +512,7 @@ impl BackupStats {
 
 	/// Save the statistics to a formatted text file alongside the backup folder
 	pub fn save(&self) -> io::Result<()> {
-		let stats_path = get_stats_file_path(&self.inner.backup_root);
+		let stats_path = get_stats_file_path(&self.inner.output_dir, &self.inner.session_id);
 		let mut file = File::create(&stats_path)?;
 
 		for line in self.format_summary() {

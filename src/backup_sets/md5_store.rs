@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 pub struct Md5Store {
 	hashes: HashMap<PathBuf, [u8; 16]>,
-	backup_root: PathBuf,
+	/// Directory where MD5 files are stored (parent of backup set folder)
+	output_dir: PathBuf,
+	/// Session ID used for naming the MD5 file (e.g., "dhb-set-20260329-084109")
+	session_id: String,
 }
 
 /// Returns the path to the MD5 file for a backup set.
@@ -24,15 +27,40 @@ fn get_md5_file_path(backup_root: &Path) -> PathBuf {
 }
 
 impl Md5Store {
-	pub fn new(backup_root: &Path) -> Self {
+	/// Create a new MD5 store for a backup session.
+	/// `backup_root` is the backup set folder path (used to derive output directory).
+	/// `session_id` is the final name for the MD5 file (without wip_ prefix).
+	pub fn new(backup_root: &Path, session_id: &str) -> Self {
+		let output_dir = backup_root
+			.parent()
+			.expect("backup root must have parent directory")
+			.to_path_buf();
 		Md5Store {
 			hashes: HashMap::new(),
-			backup_root: backup_root.to_path_buf(),
+			output_dir,
+			session_id: session_id.to_string(),
 		}
 	}
 
+	/// Load MD5 hashes from an existing backup set.
+	/// Used for reading previous backup's hashes for comparison.
 	pub fn load_from_backup(backup_path: &Path) -> io::Result<Self> {
-		let mut store = Self::new(backup_path);
+		let folder_name = backup_path
+			.file_name()
+			.expect("backup path must have a folder name")
+			.to_string_lossy()
+			.to_string();
+		let output_dir = backup_path
+			.parent()
+			.expect("backup path must have parent directory")
+			.to_path_buf();
+
+		let mut store = Md5Store {
+			hashes: HashMap::new(),
+			output_dir,
+			session_id: folder_name,
+		};
+
 		let md5_file_path = get_md5_file_path(backup_path);
 
 		if md5_file_path.exists() {
@@ -55,7 +83,7 @@ impl Md5Store {
 	}
 
 	pub fn save(&self) -> io::Result<()> {
-		let md5_file_path = get_md5_file_path(&self.backup_root);
+		let md5_file_path = self.output_dir.join(format!("{}.md5", self.session_id));
 		let mut file = File::create(&md5_file_path)?;
 
 		let mut entries: Vec<(&PathBuf, &[u8; 16])> = self.hashes.iter().collect();
@@ -101,6 +129,11 @@ impl Md5Store {
 
 	pub fn get_hash(&self, rel_path: &Path) -> Option<&[u8; 16]> {
 		self.hashes.get(rel_path)
+	}
+
+	/// Returns the path where the MD5 file will be saved.
+	pub fn md5_file_path(&self) -> PathBuf {
+		self.output_dir.join(format!("{}.md5", self.session_id))
 	}
 }
 
@@ -222,7 +255,7 @@ mod tests {
 		let backup_path = temp_dir.path().join("dhb-set-test");
 		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(&backup_path);
+		let mut store = Md5Store::new(&backup_path, "dhb-set-test");
 
 		let hash1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		let hash2 = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
@@ -300,7 +333,7 @@ mod tests {
 		let backup_path = temp_dir.path().join("dhb-set-test");
 		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(&backup_path);
+		let mut store = Md5Store::new(&backup_path, "dhb-set-test");
 
 		let hash = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		store.add_hash(Path::new("file.txt"), hash);
@@ -341,7 +374,7 @@ mod tests {
 		let backup_path = temp_dir.path().join("dhb-set-test");
 		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(&backup_path);
+		let mut store = Md5Store::new(&backup_path, "dhb-set-test");
 
 		let hash1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		let path1 = PathBuf::from("file\nwith\nnewlines.txt");

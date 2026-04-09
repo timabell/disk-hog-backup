@@ -105,6 +105,11 @@ pub fn backup_folder(
 	initial_disk_space: Option<crate::disk_space::DiskSpace>,
 	auto_delete_config: AutoDeleteConfig,
 ) -> io::Result<()> {
+	// Test hook: read abort limit once at start (env vars don't change during execution)
+	let test_abort_after: Option<usize> = std::env::var("DHB_TEST_ABORT_AFTER_FILES")
+		.ok()
+		.and_then(|s| s.parse().ok());
+
 	eprintln!("backing up folder {} into {}", source, dest);
 
 	// Calculate total size for progress tracking
@@ -153,6 +158,7 @@ pub fn backup_folder(
 		&mut context,
 		&mut ignored_paths,
 		&auto_delete_config,
+		test_abort_after,
 	)?;
 
 	// Output summary of ignored paths
@@ -173,13 +179,9 @@ pub fn backup_folder(
 	context.save_md5_store()?;
 
 	// Capture MD5 store file size
-	if let Some(parent) = dest_path.parent()
-		&& let Some(folder_name) = dest_path.file_name()
-	{
-		let md5_store_path = parent.join(format!("{}.md5", folder_name.to_string_lossy()));
-		if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
-			context.stats.set_md5_store_size(md5_metadata.len());
-		}
+	let md5_store_path = context.md5_file_path();
+	if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
+		context.stats.set_md5_store_size(md5_metadata.len());
 	}
 
 	// Capture final disk space before saving stats
@@ -206,6 +208,7 @@ fn process_directory(
 	context: &mut BackupContext,
 	ignored_paths: &mut HashSet<String>,
 	auto_delete_config: &AutoDeleteConfig,
+	test_abort_after: Option<usize>,
 ) -> io::Result<()> {
 	// Create the destination directory if it doesn't exist
 	fs::create_dir_all(dest_path)?;
@@ -227,6 +230,7 @@ fn process_directory(
 		&ignore_manager,
 		ignored_paths,
 		auto_delete_config,
+		test_abort_after,
 	)
 }
 
@@ -241,6 +245,7 @@ fn process_directory_recursive(
 	ignore_manager: &IgnoreManager,
 	ignored_paths: &mut HashSet<String>,
 	auto_delete_config: &AutoDeleteConfig,
+	test_abort_after: Option<usize>,
 ) -> io::Result<()> {
 	// Read the directory entries
 	let entries = match fs::read_dir(current_path) {
@@ -388,6 +393,7 @@ fn process_directory_recursive(
 				&local_ignore_manager,
 				ignored_paths,
 				auto_delete_config,
+				test_abort_after,
 			)?;
 		} else {
 			// Ensure parent directories exist
@@ -451,6 +457,18 @@ fn process_directory_recursive(
 					continue;
 				}
 				return Err(e);
+			}
+
+			// Check for test abort after each file (for testing interrupted backups).
+			// Set DHB_TEST_ABORT_AFTER_FILES=N to abort after processing N files.
+			if let Some(limit) = test_abort_after {
+				let files_processed = context.stats.files_processed();
+				if files_processed >= limit {
+					return Err(io::Error::other(format!(
+						"Test abort triggered after {} files",
+						files_processed
+					)));
+				}
 			}
 		}
 	}

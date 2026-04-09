@@ -256,12 +256,13 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 		})
 		.ok_or("Could not find set name in output")?;
 
-	// Parse the timestamp from set name (format: dhb-set-YYYYMMDD-HHMMSS)
+	// During backup, the set name has wip_ prefix (format: wip_dhb-set-YYYYMMDD-HHMMSS)
 	assert!(
-		set_name.starts_with("dhb-set-"),
-		"set name should start with dhb-set-"
+		set_name.starts_with("wip_dhb-set-"),
+		"set name during backup should start with wip_dhb-set-, got: {}",
+		set_name
 	);
-	let datetime_str = &set_name[8..]; // Skip "dhb-set-"
+	let datetime_str = &set_name[12..]; // Skip "wip_dhb-set-"
 	let backup_time = chrono::NaiveDateTime::parse_from_str(datetime_str, "%Y%m%d-%H%M%S")?;
 
 	// Verify timestamp is within the execution window (allowing for second rollover)
@@ -273,11 +274,12 @@ fn test_backup_set_naming() -> Result<(), Box<dyn std::error::Error>> {
 		after_backup
 	);
 
-	// Verify the folder exists on disk with exactly this name
-	let backup_folder = Path::new(&dest).join(set_name);
+	// Verify the final folder exists on disk (wip_ prefix removed after completion)
+	let final_set_name = set_name.strip_prefix("wip_").unwrap();
+	let backup_folder = Path::new(&dest).join(final_set_name);
 	assert!(
 		backup_folder.exists(),
-		"backup folder {} should exist on disk",
+		"backup folder {} should exist on disk (wip_ prefix removed after completion)",
 		backup_folder.display()
 	);
 
@@ -1209,6 +1211,53 @@ fn test_auto_delete_flag() -> io::Result<()> {
 	// Note: This test doesn't trigger actual disk-full conditions
 	// Just-in-time deletion messaging would only appear if disk space was actually low
 	// Per ADR-004, we accept the testing gap for E2E disk exhaustion scenarios
+
+	Ok(())
+}
+
+#[test]
+fn test_interrupted_backup_leaves_wip_folder() -> io::Result<()> {
+	// Test that an interrupted backup leaves a wip_ folder (not renamed to final name).
+	// This ensures users can identify incomplete backups.
+
+	let source = create_tmp_folder("interrupted_source")?;
+	create_test_file(&source, "file1.txt", "content 1")?;
+	create_test_file(&source, "file2.txt", "content 2")?;
+	create_test_file(&source, "file3.txt", "content 3")?;
+
+	let backup_root = create_tmp_folder("interrupted_backups")?;
+
+	// Set env var to abort after 1 file
+	let output = disk_hog_backup_cmd()
+		.env("DHB_TEST_ABORT_AFTER_FILES", "1")
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.output()?;
+
+	// Backup should have failed
+	assert!(
+		!output.status.success(),
+		"Backup should fail when test abort is triggered"
+	);
+
+	// Verify wip_ folder exists (incomplete backup)
+	let wip_entries: Vec<_> = fs::read_dir(&backup_root)?
+		.filter_map(Result::ok)
+		.filter(|e| e.file_name().to_string_lossy().starts_with("wip_"))
+		.collect();
+	assert!(
+		!wip_entries.is_empty(),
+		"Interrupted backup should leave wip_ folder"
+	);
+
+	// Verify no completed backup exists
+	let backup_sets = get_backup_sets(&backup_root)?;
+	assert!(
+		backup_sets.is_empty(),
+		"Should not have any completed backup sets after interruption"
+	);
 
 	Ok(())
 }
