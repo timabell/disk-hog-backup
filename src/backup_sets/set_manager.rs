@@ -1,3 +1,4 @@
+use super::BACKUP_SET_PREFIX;
 use rand::RngExt;
 use std::fs;
 use std::io;
@@ -26,7 +27,7 @@ pub fn list_backup_sets(dest: &Path) -> io::Result<Vec<BackupSetInfo>> {
 		}
 
 		let name = entry.file_name().to_string_lossy().to_string();
-		if !name.starts_with("dhb-set-") {
+		if !name.starts_with(BACKUP_SET_PREFIX) {
 			continue;
 		}
 

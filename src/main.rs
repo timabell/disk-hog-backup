@@ -1,10 +1,5 @@
-mod backup;
-mod backup_sets;
-mod dhcopy;
-mod disk_space;
-
-use crate::backup::backup;
 use clap::Parser;
+use disk_hog_backup::backup::backup;
 use std::process;
 
 #[derive(Parser)]

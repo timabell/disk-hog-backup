@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use disk_hog_backup::backup_sets::backup_set::backup_sets as get_backup_sets;
 use std::env;
 use std::fs;
 use std::io;
@@ -27,10 +28,9 @@ fn test_backup_of_single_text_file() -> io::Result<()> {
 		.success();
 
 	// Verify backup contents
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	let backed_up_file = backup_set.path().join(test_file);
@@ -95,10 +95,9 @@ fn test_metadata_preserved() -> io::Result<()> {
 		.success();
 
 	// Find the backup file
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	let backed_up_file = backup_set.path().join(test_file);
@@ -162,9 +161,9 @@ fn test_backup_nested_file() -> Result<(), Box<dyn std::error::Error>> {
 		.success();
 
 	// Find the backup set folder
-	let backup_sets: Vec<_> = fs::read_dir(&dest)?.collect();
+	let backup_sets = get_backup_sets(&dest)?;
 	assert_eq!(backup_sets.len(), 1, "should create exactly one backup set");
-	let backup_set = backup_sets[0].as_ref().unwrap();
+	let backup_set = &backup_sets[0];
 
 	// Check nested file was backed up with folder structure
 	let nested_backup = backup_set.path().join("folder1/folder2/folder3/nested.txt");
@@ -194,9 +193,9 @@ fn test_backup_empty_nested_folder() -> Result<(), Box<dyn std::error::Error>> {
 		.success();
 
 	// Find the backup set folder
-	let backup_sets: Vec<_> = fs::read_dir(&dest)?.collect();
+	let backup_sets = get_backup_sets(&dest)?;
 	assert_eq!(backup_sets.len(), 1, "should create exactly one backup set");
-	let backup_set = backup_sets[0].as_ref().unwrap();
+	let backup_set = &backup_sets[0];
 
 	// Check empty nested folders were backed up
 	let nested_backup = backup_set.path().join("empty1/empty2/empty3");
@@ -321,10 +320,9 @@ fn test_backup_with_symlinks() -> io::Result<()> {
 		.success();
 
 	// Get the backup set directory
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	// Verify file symlink
@@ -470,7 +468,7 @@ fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Err
 		.success();
 
 	// Find the first backup set
-	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	let backup_sets = get_backup_sets(&backup_root)?;
 	assert_eq!(backup_sets.len(), 1, "Should create exactly one backup set");
 	let first_backup_set = &backup_sets[0];
 
@@ -503,11 +501,10 @@ fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Err
 		.success();
 
 	// Find the second backup set (should be the newest one)
-	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	let mut backup_sets = get_backup_sets(&backup_root)?;
 	assert_eq!(backup_sets.len(), 2, "Should now have two backup sets");
 
 	// Sort backup sets by creation time to find the newest one
-	let mut backup_sets = backup_sets;
 	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().created().unwrap());
 	let second_backup_set = &backup_sets[1];
 
@@ -661,22 +658,21 @@ alpha/delta/
 
 	// Assert
 	// Find the backup set
-	let backup_sets = fs::read_dir(&destination)?;
+	let backup_sets = get_backup_sets(&destination)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	for path in ignored_files {
 		assert!(
-			!Path::new(&backup_set.path()).join(path).exists(),
+			!backup_set.path().join(path).exists(),
 			"'{}' should be ignored",
 			path
 		);
 	}
 	for path in kept_files {
 		assert!(
-			Path::new(&backup_set.path()).join(path).exists(),
+			backup_set.path().join(path).exists(),
 			"'{}' should be kept",
 			path
 		);
@@ -709,14 +705,13 @@ fn test_backup_of_hidden_file() -> io::Result<()> {
 		.success();
 
 	// Find the backup set
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	// Check that the hidden file was backed up
-	let hidden_file_path = Path::new(&backup_set.path()).join(".hidden_file");
+	let hidden_file_path = backup_set.path().join(".hidden_file");
 	assert!(hidden_file_path.exists(), "Hidden file should be backed up");
 
 	// Check the content of the hidden file
@@ -767,10 +762,9 @@ fn test_backup_skips_special_files() -> io::Result<()> {
 		.success();
 
 	// Verify backup contents
-	let backup_sets = fs::read_dir(&backup_root)?;
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set = backup_sets
-		.filter_map(Result::ok)
-		.next()
+		.first()
 		.expect("Should have created a backup set");
 
 	// Regular file should be backed up
@@ -838,9 +832,11 @@ fn test_backup_stats_functionality() -> io::Result<()> {
 		.success();
 
 	// Get the backup set directory
-	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	let backup_sets = get_backup_sets(&backup_root)?;
 	let backup_set_path = backup_sets[0].path();
-	let stats_file = backup_set_path.join("disk-hog-backup-stats.txt");
+	// Stats file is in parent directory, named after backup folder
+	let backup_set_name = backup_set_path.file_name().unwrap().to_string_lossy();
+	let stats_file = Path::new(&backup_root).join(format!("{}-stats.txt", backup_set_name));
 	let stats_content = fs::read_to_string(&stats_file)?;
 
 	// Normalize timestamps and durations using regex
@@ -1018,7 +1014,7 @@ fn test_backup_with_directory_symlink_loop() -> io::Result<()> {
 		.success();
 
 	// Get the backup set directory
-	let backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	let backup_sets = get_backup_sets(&backup_root)?;
 	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
 	let backup_set = &backup_sets[0];
 
@@ -1105,9 +1101,13 @@ fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
 		.success();
 
 	// Get second backup stats
-	let mut backup_sets: Vec<_> = fs::read_dir(&backup_root)?.filter_map(Result::ok).collect();
+	let mut backup_sets = get_backup_sets(&backup_root)?;
 	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().modified().unwrap());
-	let stats = fs::read_to_string(backup_sets[1].path().join("disk-hog-backup-stats.txt"))?;
+	// Stats file is in parent directory, named after backup folder
+	let backup_set_path = backup_sets[1].path();
+	let backup_set_name = backup_set_path.file_name().unwrap().to_string_lossy();
+	let stats =
+		fs::read_to_string(Path::new(&backup_root).join(format!("{}-stats.txt", backup_set_name)))?;
 
 	// Verify we got one of each type
 	println!("Stats:\n{}", stats);
@@ -1203,10 +1203,7 @@ fn test_auto_delete_flag() -> io::Result<()> {
 	);
 
 	// Verify backup was created
-	let sets: Vec<_> = fs::read_dir(&backup_root)?
-		.filter_map(Result::ok)
-		.filter(|e| e.file_name().to_string_lossy().starts_with("dhb-set-"))
-		.collect();
+	let sets = get_backup_sets(&backup_root)?;
 	assert_eq!(sets.len(), 1, "Should have created one backup set");
 
 	// Note: This test doesn't trigger actual disk-full conditions

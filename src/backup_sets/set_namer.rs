@@ -1,3 +1,4 @@
+use super::BACKUP_SET_PREFIX;
 use chrono::{Datelike, Timelike, Utc};
 
 pub fn generate_name<F>(get_time: F) -> String
@@ -6,7 +7,8 @@ where
 {
 	let time = get_time();
 	format!(
-		"dhb-set-{:04}{:02}{:02}-{:02}{:02}{:02}",
+		"{}{:04}{:02}{:02}-{:02}{:02}{:02}",
+		BACKUP_SET_PREFIX,
 		time.year(),
 		time.month(),
 		time.day(),

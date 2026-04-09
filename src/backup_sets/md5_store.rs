@@ -5,11 +5,22 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-const MD5_FILENAME: &str = "disk-hog-backup-hashes.md5";
-
 pub struct Md5Store {
 	hashes: HashMap<PathBuf, [u8; 16]>,
 	backup_root: PathBuf,
+}
+
+/// Returns the path to the MD5 file for a backup set.
+/// The MD5 file is stored in the parent directory, named after the backup folder.
+/// e.g., for backup_root `/dest/dhb-set-20260329-084109`, returns `/dest/dhb-set-20260329-084109.md5`
+fn get_md5_file_path(backup_root: &Path) -> PathBuf {
+	let parent = backup_root
+		.parent()
+		.expect("backup root must have parent directory");
+	let folder_name = backup_root
+		.file_name()
+		.expect("backup root must have a folder name");
+	parent.join(format!("{}.md5", folder_name.to_string_lossy()))
 }
 
 impl Md5Store {
@@ -22,7 +33,7 @@ impl Md5Store {
 
 	pub fn load_from_backup(backup_path: &Path) -> io::Result<Self> {
 		let mut store = Self::new(backup_path);
-		let md5_file_path = backup_path.join(MD5_FILENAME);
+		let md5_file_path = get_md5_file_path(backup_path);
 
 		if md5_file_path.exists() {
 			let file = File::open(&md5_file_path)?;
@@ -44,7 +55,7 @@ impl Md5Store {
 	}
 
 	pub fn save(&self) -> io::Result<()> {
-		let md5_file_path = self.backup_root.join(MD5_FILENAME);
+		let md5_file_path = get_md5_file_path(&self.backup_root);
 		let mut file = File::create(&md5_file_path)?;
 
 		let mut entries: Vec<(&PathBuf, &[u8; 16])> = self.hashes.iter().collect();
@@ -168,8 +179,14 @@ impl Md5Store {
 		unescaped_path
 	}
 
-	fn create_md5_checksum_of_md5_file(md5_file_path: &PathBuf) -> io::Result<()> {
-		let md5_checksum_path = md5_file_path.with_file_name(format!("{}.md5", MD5_FILENAME));
+	fn create_md5_checksum_of_md5_file(md5_file_path: &Path) -> io::Result<()> {
+		// The checksum file is named after the md5 file with .md5 appended
+		// e.g., dhb-set-test.md5 -> dhb-set-test.md5.md5
+		let md5_file_name = md5_file_path
+			.file_name()
+			.expect("md5 file path must have a file name")
+			.to_string_lossy();
+		let md5_checksum_path = md5_file_path.with_file_name(format!("{}.md5", md5_file_name));
 
 		let md5_content = std::fs::read(md5_file_path)?;
 
@@ -185,7 +202,7 @@ impl Md5Store {
 			});
 
 		let mut file = File::create(&md5_checksum_path)?;
-		writeln!(file, "{}  {}", hash_hex, MD5_FILENAME)?;
+		writeln!(file, "{}  {}", hash_hex, md5_file_name)?;
 
 		eprintln!("MD5 checksum saved to: {}", md5_checksum_path.display());
 
@@ -202,9 +219,10 @@ mod tests {
 	#[test]
 	fn test_md5_store_save_and_load() {
 		let temp_dir = tempdir().unwrap();
-		let backup_path = temp_dir.path();
+		let backup_path = temp_dir.path().join("dhb-set-test");
+		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(backup_path);
+		let mut store = Md5Store::new(&backup_path);
 
 		let hash1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		let hash2 = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
@@ -214,21 +232,29 @@ mod tests {
 
 		store.save().unwrap();
 
-		let md5_checksum_path = backup_path.join(format!("{}.md5", MD5_FILENAME));
-		assert!(md5_checksum_path.exists(), "MD5 checksum file should exist");
-
-		let content = std::fs::read_to_string(&md5_checksum_path).unwrap();
+		// MD5 files should be in parent directory, named after backup folder
+		let md5_file = temp_dir.path().join("dhb-set-test.md5");
+		let md5_checksum = temp_dir.path().join("dhb-set-test.md5.md5");
+		assert!(md5_file.exists(), "MD5 file should exist in parent dir");
 		assert!(
-			content.ends_with(&format!("  {}\n", MD5_FILENAME)),
+			md5_checksum.exists(),
+			"MD5 checksum file should exist in parent dir"
+		);
+
+		// Verify the checksum file format: 32-char hash + 2 spaces + filename + newline
+		let content = std::fs::read_to_string(&md5_checksum).unwrap();
+		let md5_filename = "dhb-set-test.md5";
+		assert!(
+			content.ends_with(&format!("  {}\n", md5_filename)),
 			"MD5 checksum file should be in md5sum compatible format"
 		);
 		assert_eq!(
 			content.len(),
-			32 + 2 + MD5_FILENAME.len() + 1,
+			32 + 2 + md5_filename.len() + 1,
 			"MD5 checksum file should contain a 32-character hash, two spaces, the filename, and a newline"
 		);
 
-		let loaded_store = Md5Store::load_from_backup(backup_path).unwrap();
+		let loaded_store = Md5Store::load_from_backup(&backup_path).unwrap();
 
 		assert_eq!(loaded_store.get_hash(Path::new("file1.txt")), Some(&hash1));
 		assert_eq!(
@@ -244,8 +270,10 @@ mod tests {
 	#[test]
 	fn test_md5_store_with_invalid_data() {
 		let temp_dir = tempdir().unwrap();
-		let backup_path = temp_dir.path();
-		let md5_file_path = backup_path.join(MD5_FILENAME);
+		let backup_path = temp_dir.path().join("dhb-set-test");
+		std::fs::create_dir(&backup_path).unwrap();
+		// MD5 file is in parent directory, named after backup folder
+		let md5_file_path = temp_dir.path().join("dhb-set-test.md5");
 
 		{
 			let mut file = File::create(&md5_file_path).unwrap();
@@ -256,7 +284,7 @@ mod tests {
 			writeln!(file, "0102030405060708090a0b0c0d0e0f10").unwrap();
 		}
 
-		let store = Md5Store::load_from_backup(backup_path).unwrap();
+		let store = Md5Store::load_from_backup(&backup_path).unwrap();
 
 		assert!(store.get_hash(Path::new("valid_file.txt")).is_some());
 		assert!(
@@ -269,17 +297,19 @@ mod tests {
 	#[test]
 	fn test_md5_checksum_of_md5_file() {
 		let temp_dir = tempdir().unwrap();
-		let backup_path = temp_dir.path();
+		let backup_path = temp_dir.path().join("dhb-set-test");
+		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(backup_path);
+		let mut store = Md5Store::new(&backup_path);
 
 		let hash = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		store.add_hash(Path::new("file.txt"), hash);
 
 		store.save().unwrap();
 
-		let md5_file_path = backup_path.join(MD5_FILENAME);
-		let md5_checksum_path = backup_path.join(format!("{}.md5", MD5_FILENAME));
+		// MD5 files are in parent directory, named after backup folder
+		let md5_file_path = temp_dir.path().join("dhb-set-test.md5");
+		let md5_checksum_path = temp_dir.path().join("dhb-set-test.md5.md5");
 
 		assert!(md5_file_path.exists(), "MD5 file should exist");
 		assert!(md5_checksum_path.exists(), "MD5 checksum file should exist");
@@ -308,9 +338,10 @@ mod tests {
 	#[test]
 	fn test_special_characters_in_filenames() {
 		let temp_dir = tempdir().unwrap();
-		let backup_path = temp_dir.path();
+		let backup_path = temp_dir.path().join("dhb-set-test");
+		std::fs::create_dir(&backup_path).unwrap();
 
-		let mut store = Md5Store::new(backup_path);
+		let mut store = Md5Store::new(&backup_path);
 
 		let hash1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 		let path1 = PathBuf::from("file\nwith\nnewlines.txt");
@@ -335,15 +366,15 @@ mod tests {
 \02030405060708090a0b0c0d0e0f1011  file\\with\\backslashes.txt
 "#;
 
-		// Read the actual content
-		let md5_file_path = backup_path.join(MD5_FILENAME);
+		// Read the actual content - MD5 file is in parent directory
+		let md5_file_path = temp_dir.path().join("dhb-set-test.md5");
 		let actual_content = std::fs::read_to_string(&md5_file_path).unwrap();
 
 		// Assert that the content matches
 		assert_eq!(expected_content, actual_content);
 
 		// Load the store from backup
-		let loaded_store = Md5Store::load_from_backup(backup_path).unwrap();
+		let loaded_store = Md5Store::load_from_backup(&backup_path).unwrap();
 
 		// Verify that the hashes are correctly loaded
 		assert_eq!(

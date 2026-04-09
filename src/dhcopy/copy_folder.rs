@@ -173,9 +173,13 @@ pub fn backup_folder(
 	context.save_md5_store()?;
 
 	// Capture MD5 store file size
-	let md5_store_path = dest_path.join("disk-hog-backup-hashes.md5");
-	if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
-		context.stats.set_md5_store_size(md5_metadata.len());
+	if let Some(parent) = dest_path.parent()
+		&& let Some(folder_name) = dest_path.file_name()
+	{
+		let md5_store_path = parent.join(format!("{}.md5", folder_name.to_string_lossy()));
+		if let Ok(md5_metadata) = fs::metadata(&md5_store_path) {
+			context.stats.set_md5_store_size(md5_metadata.len());
+		}
 	}
 
 	// Capture final disk space before saving stats

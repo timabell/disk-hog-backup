@@ -1,37 +1,39 @@
-use std::fs;
+use super::BACKUP_SET_PREFIX;
+use std::fs::{self, DirEntry};
+use std::io;
 use std::path::Path;
 
+/// Returns backup set directories from the destination folder
+pub fn backup_sets(dest: &str) -> io::Result<Vec<DirEntry>> {
+	let entries: Vec<_> = fs::read_dir(dest)?
+		.filter_map(Result::ok)
+		.filter(|entry| {
+			entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+				&& entry
+					.file_name()
+					.to_string_lossy()
+					.starts_with(BACKUP_SET_PREFIX)
+		})
+		.collect();
+	Ok(entries)
+}
+
 pub fn find_most_recent_set(dest: &str) -> Option<String> {
-	match fs::read_dir(dest) {
-		Ok(entries) => {
-			let mut backup_sets: Vec<_> = entries
-				.filter_map(Result::ok)
-				.filter_map(|entry| {
-					let meta = entry.metadata().ok()?;
-					if meta.is_dir() && entry.file_name().to_string_lossy().starts_with("dhb-set-")
-					{
-						Some((
-							entry.file_name().to_string_lossy().to_string(),
-							meta.created().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-						))
-					} else {
-						None
-					}
-				})
-				.collect();
+	let mut sets: Vec<_> = backup_sets(dest)
+		.ok()?
+		.into_iter()
+		.filter_map(|entry| {
+			let created = entry
+				.metadata()
+				.ok()?
+				.created()
+				.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+			Some((entry.file_name().to_string_lossy().to_string(), created))
+		})
+		.collect();
 
-			if backup_sets.is_empty() {
-				return None;
-			}
-
-			// Sort by creation time, most recent last
-			backup_sets.sort_by_key(|(_, created)| *created);
-
-			// Return the most recent (last) entry
-			backup_sets.last().map(|(set_name, _)| set_name).cloned()
-		}
-		Err(_) => None,
-	}
+	sets.sort_by_key(|(_, created)| *created);
+	sets.last().map(|(name, _)| name.clone())
 }
 
 /// Find the most recent backup set and return its full path

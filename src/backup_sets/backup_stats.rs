@@ -8,7 +8,18 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const STATS_FILENAME: &str = "disk-hog-backup-stats.txt";
+/// Returns the path to the stats file for a backup set.
+/// The stats file is stored in the parent directory, named after the backup folder.
+/// e.g., for backup_root `/dest/dhb-set-20260329-084109`, returns `/dest/dhb-set-20260329-084109-stats.txt`
+fn get_stats_file_path(backup_root: &Path) -> PathBuf {
+	let parent = backup_root
+		.parent()
+		.expect("backup root must have parent directory");
+	let folder_name = backup_root
+		.file_name()
+		.expect("backup root must have a folder name");
+	parent.join(format!("{}-stats.txt", folder_name.to_string_lossy()))
+}
 
 /// Statistics for a backup operation, designed to be thread-safe for parallel processing
 #[derive(Clone)]
@@ -490,9 +501,9 @@ impl BackupStats {
 		lines
 	}
 
-	/// Save the statistics to a formatted text file in the backup root directory
+	/// Save the statistics to a formatted text file alongside the backup folder
 	pub fn save(&self) -> io::Result<()> {
-		let stats_path = self.inner.backup_root.join(STATS_FILENAME);
+		let stats_path = get_stats_file_path(&self.inner.backup_root);
 		let mut file = File::create(&stats_path)?;
 
 		for line in self.format_summary() {
@@ -971,7 +982,7 @@ mod tests {
 	#[test]
 	fn test_save_stats_format() {
 		let temp_dir = tempdir().unwrap();
-		let backup_path = temp_dir.path().join("backup");
+		let backup_path = temp_dir.path().join("dhb-set-20250929-131320");
 		std::fs::create_dir(&backup_path).unwrap();
 		let stats = BackupStats::new(
 			&backup_path,
@@ -994,8 +1005,9 @@ mod tests {
 		// Save stats
 		stats.save().unwrap();
 
-		// Read and verify file contents
-		let stats_path = backup_path.join(STATS_FILENAME);
+		// Stats file is in parent directory, named after backup folder
+		let stats_path = temp_dir.path().join("dhb-set-20250929-131320-stats.txt");
+		assert!(stats_path.exists(), "Stats file should exist in parent dir");
 		let contents = std::fs::read_to_string(stats_path).unwrap();
 
 		// Verify key sections exist
