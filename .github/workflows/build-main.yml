@@ -13,9 +13,6 @@ permissions:
   contents: write
 
 jobs:
-  ci:
-    uses: ./.github/workflows/_ci.yml
-
   check-release:
     runs-on: ubuntu-latest
     outputs:
@@ -47,7 +44,6 @@ jobs:
           fi
 
       - name: Detect bump type
-        if: steps.check_changes.outputs.should_release == 'true'
         id: bump
         run: |
           BUMP_TYPE=$(.github/workflows/detect-bump.sh)
@@ -55,7 +51,6 @@ jobs:
           echo "Bump type: ${BUMP_TYPE:-patch}"
 
       - name: Calculate next version
-        if: steps.check_changes.outputs.should_release == 'true'
         id: version
         uses: orhun/git-cliff-action@v4
         with:
@@ -68,7 +63,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set version outputs
-        if: steps.check_changes.outputs.should_release == 'true'
         id: version_outputs
         run: |
           VERSION="${{ steps.version.outputs.content }}"
@@ -78,15 +72,14 @@ jobs:
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
-  ci-release:
-    needs: [ci, check-release]
-    if: needs.check-release.outputs.should_release == 'true'
+  ci:
+    needs: check-release
     uses: ./.github/workflows/_ci.yml
     with:
       release_tag: ${{ needs.check-release.outputs.tag }}
 
   create-tag:
-    needs: [check-release, ci-release]
+    needs: [check-release, ci]
     if: needs.check-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -100,7 +93,7 @@ jobs:
           git push origin ${{ needs.check-release.outputs.tag }}
 
   release:
-    needs: [check-release, ci-release, create-tag]
+    needs: [check-release, ci, create-tag]
     if: needs.check-release.outputs.should_release == 'true'
     uses: ./.github/workflows/_release.yml
     with:
