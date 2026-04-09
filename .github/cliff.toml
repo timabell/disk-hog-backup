@@ -1,39 +1,33 @@
 [changelog]
-header = """
-# Changelog\n
-"""
+header = ""
 body = """
-{% if version %}\
-    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
-{% else %}\
-    ## [unreleased]
+{% if version %}## Release {{ version }}
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
-    ### {{ group | upper_first }}
-    {% for commit in commits %}
-        - {{ commit.message | upper_first }}\
-    {% endfor %}
-{% endfor %}\n
+### {{ group | striptags | trim | upper_first }}
+
+{% for commit in commits %}\
+- {{ commit.message | split(pat="\n") | first | split(pat=": ") | slice(start=1) | join(sep=": ") | upper_first }} ({{ commit.id }})
+{% endfor %}
+{% endfor %}\
 """
+footer = ""
 trim = true
 
 [git]
-conventional_commits = true
-filter_unconventional = true # ignore commits with "prefix:"
+conventional_commits = false
+filter_unconventional = false
 split_commits = false
 commit_parsers = [
-    { message = "^security", group = "<!--0-->Security"},
-    { message = "^feat", group = "<!--1-->Features"},
-    { message = "^fix", group = "<!--2-->Bug Fixes"},
-    { message = "^perf", group = "<!--3-->Performance"},
-    { message = "^chore", group = "<!--4-->Chores"},
-    { message = "^refactor", group = "<!--5-->Refactor"},
-    { message = "^doc", group = "<!--6-->Documentation"},
+    { message = "^security", group = "<!-- 0 -->🔒 Security" },
+    { message = "^feat", group = "<!-- 1 -->✨ Features" },
+    { message = "^fix", group = "<!-- 2 -->🐛 Bug Fixes" },
+    { message = "^perf", group = "<!-- 3 -->⚡ Performance" },
+    { message = "^doc", group = "<!-- 4 -->📚 Documentation" },
+    { message = "^chore", group = "<!-- 5 -->🔧 Chores" },
+    { message = "^refactor", group = "<!-- 6 -->♻️ Refactor" },
 ]
-protect_breaking_commits = false
-filter_commits = true # ignore prefixes not listed above
-tag_pattern = "v[0-9]*"
-skip_tags = "v[0-9]*-.*" # ignore pre-release semver tags
-ignore_tags = ""
-topo_order = false
-sort_commits = "oldest"
+# false = include commits that don't match any parser (as ungrouped)
+# true = exclude commits that don't match any parser (only release-worthy commits)
+filter_commits = true
+tag_pattern = "v[0-9].*"

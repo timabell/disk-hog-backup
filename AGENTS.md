@@ -54,7 +54,7 @@ For background on this testing philosophy, see: https://0x5.uk/2024/03/27/why-do
 
 ## Commit Message Prefixes
 
-From `.github/cliff.toml`, these prefixes appear in the changelog:
+From `.github/cliff.toml`, these prefixes trigger automatic releases:
 - `security:` - Security fixes
 - `feat:` - New features
 - `fix:` - Bug fixes
@@ -62,6 +62,14 @@ From `.github/cliff.toml`, these prefixes appear in the changelog:
 - `chore:` - Maintenance tasks
 - `refactor:` - Code refactoring
 - `doc:` - Documentation changes
+
+## Release Process
+
+Releases are automatic on pushes to main when commits contain release-worthy prefixes (above).
+
+- **Version bumping**: Defaults to patch. Add `bump: minor` or `bump: major` as a commit footer to control.
+- **Preview release notes**: `./release-notes.sh --preview`
+- **View latest release notes**: `./release-notes.sh`
 
 ## Design Documents
 

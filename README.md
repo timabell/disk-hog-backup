@@ -205,11 +205,9 @@ The `.dhbignore` file supports the following pattern syntax:
 * [BackInTime](https://backintime.readthedocs.io/)
 * My own [verify/rehash scripts](https://gist.github.com/timabell/f70f34f8933b2abaf42789f8afdbd7d5)
 
-# Code Design
+# Development
 
-* [Outside-in-tests](https://pod.0x5.uk/25)
-* [Architecture Decision Records (ADRs)](doc/adr/)
-* [Threading Architecture](doc/threading.md) - Multi-threaded pipeline design for backup operations
+See [doc/development.md](doc/development.md) for build instructions, testing, release process, and code design.
 
 # Alternative tools
 
