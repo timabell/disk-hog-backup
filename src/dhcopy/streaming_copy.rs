@@ -3,7 +3,7 @@ use md5::Context;
 use std::{
 	fmt::Write,
 	fs::{self, File},
-	io::{self, Read, Write as IoWrite},
+	io::{self, Read, Seek, SeekFrom, Write as IoWrite},
 	path::{Path, PathBuf},
 	sync::{
 		Arc,
@@ -20,6 +20,17 @@ use crate::disk_space::DiskSpace;
 const CHUNK_SIZE: usize = 256 * 1024; // 256KB per chunk
 const MAX_QUEUE_CHUNKS: usize = 32; // Limit read-ahead to 32 chunks per file
 const GLOBAL_MAX_BUFFER: usize = 4 * 1024 * 1024 * 1024; // 4GB across all files
+const SPARSE_BLOCK_SIZE: usize = 4096; // 4KB blocks for sparse detection (matches typical filesystem block size)
+
+/// Operations sent to the writer thread for sparse-aware file writing.
+/// See doc/adr/0005-sparse-file-preservation.md
+#[derive(Debug)]
+enum WriteOp {
+	/// Non-zero data to write
+	Data(Arc<Vec<u8>>),
+	/// Number of bytes to seek past (creates a hole in sparse file)
+	Hole(usize),
+}
 
 // Global memory usage counter
 static GLOBAL_MEMORY_USAGE: AtomicUsize = AtomicUsize::new(0);
@@ -481,7 +492,8 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 	// Create bounded channels
 	// Use Arc to share chunks between writer and hasher without cloning data
 	// Channels carry Result to propagate I/O errors from threads
-	let (writer_tx, writer_rx) = bounded::<Result<Arc<Vec<u8>>, io::Error>>(MAX_QUEUE_CHUNKS);
+	// Writer receives WriteOp for sparse-aware writing, hasher receives raw chunks
+	let (writer_tx, writer_rx) = bounded::<Result<WriteOp, io::Error>>(MAX_QUEUE_CHUNKS);
 	let (hasher_tx, hasher_rx) = bounded::<Result<Arc<Vec<u8>>, io::Error>>(MAX_QUEUE_CHUNKS);
 	let (md5_tx, md5_rx) = bounded::<Result<[u8; 16], io::Error>>(1);
 
@@ -568,10 +580,63 @@ fn stream_with_unified_pipeline(args: StreamPipelineArgs) -> io::Result<(bool, [
 	Ok((false, src_hash))
 }
 
+/// Check if a block is all zeros (for sparse file detection)
+fn is_zero_block(block: &[u8]) -> bool {
+	block.iter().all(|&b| b == 0)
+}
+
+/// Convert a chunk into WriteOp messages, coalescing contiguous regions.
+/// Scans the chunk in SPARSE_BLOCK_SIZE blocks and emits Data for non-zero
+/// regions and Hole for zero regions.
+fn chunk_to_write_ops(chunk: &[u8]) -> Vec<WriteOp> {
+	let mut ops = Vec::new();
+	let mut offset = 0;
+
+	while offset < chunk.len() {
+		let remaining = chunk.len() - offset;
+		let block_size = remaining.min(SPARSE_BLOCK_SIZE);
+		let block = &chunk[offset..offset + block_size];
+
+		if is_zero_block(block) {
+			// Start of zero region - find how far it extends
+			let hole_start = offset;
+			offset += block_size;
+			while offset < chunk.len() {
+				let remaining = chunk.len() - offset;
+				let block_size = remaining.min(SPARSE_BLOCK_SIZE);
+				let block = &chunk[offset..offset + block_size];
+				if is_zero_block(block) {
+					offset += block_size;
+				} else {
+					break;
+				}
+			}
+			ops.push(WriteOp::Hole(offset - hole_start));
+		} else {
+			// Start of data region - find how far it extends
+			let data_start = offset;
+			offset += block_size;
+			while offset < chunk.len() {
+				let remaining = chunk.len() - offset;
+				let block_size = remaining.min(SPARSE_BLOCK_SIZE);
+				let block = &chunk[offset..offset + block_size];
+				if !is_zero_block(block) {
+					offset += block_size;
+				} else {
+					break;
+				}
+			}
+			ops.push(WriteOp::Data(Arc::new(chunk[data_start..offset].to_vec())));
+		}
+	}
+
+	ops
+}
+
 // Reader thread: reads source file in chunks and sends to both writer and hasher
 fn reader_thread(
 	src_path: &Path,
-	writer_tx: Sender<Result<Arc<Vec<u8>>, io::Error>>,
+	writer_tx: Sender<Result<WriteOp, io::Error>>,
 	hasher_tx: Sender<Result<Arc<Vec<u8>>, io::Error>>,
 	global_memory: &AtomicUsize,
 	stats: &BackupStats,
@@ -619,7 +684,7 @@ fn reader_thread(
 		// Track source bytes read
 		stats.add_source_read(bytes_read as u64);
 
-		// Create a chunk wrapped in Arc to share between writer and hasher without cloning data
+		// Create a chunk wrapped in Arc for the hasher (needs full data for MD5)
 		let chunk = Arc::new(buffer[..bytes_read].to_vec());
 
 		// 2. Time memory throttle (if any)
@@ -642,16 +707,19 @@ fn reader_thread(
 		stats.sample_writer_queue_depth(writer_tx.len() as u64);
 		stats.sample_hasher_queue_depth(hasher_tx.len() as u64);
 
-		// 4. Time send to writer channel
+		// 4. Convert chunk to sparse-aware WriteOps and send to writer
 		let start = std::time::Instant::now();
-		if writer_tx.send(Ok(Arc::clone(&chunk))).is_err() {
-			// Writer closed (likely due to error) - stop reading gracefully
-			// Writer's error will propagate through its join
-			return Ok(());
+		let write_ops = chunk_to_write_ops(&chunk);
+		for op in write_ops {
+			if writer_tx.send(Ok(op)).is_err() {
+				// Writer closed (likely due to error) - stop reading gracefully
+				// Writer's error will propagate through its join
+				return Ok(());
+			}
 		}
 		stats.add_reader_send_writer_time(start.elapsed().as_nanos() as u64);
 
-		// 5. Time send to hasher channel
+		// 5. Time send to hasher channel (gets full chunk for correct MD5)
 		let start = std::time::Instant::now();
 		if hasher_tx.send(Ok(chunk)).is_err() {
 			// Hasher closed (likely due to error from reader) - stop reading gracefully
@@ -712,15 +780,17 @@ fn hasher_thread(
 	Ok(digest.0)
 }
 
-// Writer thread: receives chunks and writes them to destination
+// Writer thread: receives WriteOps and writes them to destination (sparse-aware)
 fn writer_thread(
 	dst_path: &Path,
-	data_rx: Receiver<Result<Arc<Vec<u8>>, io::Error>>,
+	data_rx: Receiver<Result<WriteOp, io::Error>>,
 	cancel_write: Arc<AtomicBool>,
 	global_memory: &AtomicUsize,
 	stats: &BackupStats,
 ) -> io::Result<()> {
 	let mut file = File::create(dst_path)?;
+	let mut file_position: u64 = 0; // Track logical file position for set_len
+	let mut cancelled = false;
 
 	// Track receive time by iterating manually
 	let mut recv_start = std::time::Instant::now();
@@ -730,38 +800,68 @@ fn writer_thread(
 		stats.add_writer_recv_time(recv_start.elapsed().as_nanos() as u64);
 
 		// Handle errors from reader
-		let chunk = match result {
-			Ok(chunk) => chunk,
+		let op = match result {
+			Ok(op) => op,
 			Err(e) => {
 				// Error from reader - propagate
 				return Err(e);
 			}
 		};
 
-		// Check cancellation flag
+		// Get size for memory accounting (needed whether cancelled or not)
+		let op_size = match &op {
+			WriteOp::Data(chunk) => chunk.len(),
+			WriteOp::Hole(size) => *size,
+		};
+
+		// Check cancellation flag (but continue draining for memory accounting)
 		if cancel_write.load(Ordering::SeqCst) {
-			// Clean up and exit
-			drop(file);
-			if dst_path.exists() {
-				fs::remove_file(dst_path)?;
-			}
-			return Ok(());
+			cancelled = true;
 		}
 
-		// 2. Time write I/O
+		if cancelled {
+			// Just decrement memory, don't write
+			global_memory.fetch_sub(op_size, Ordering::SeqCst);
+			recv_start = std::time::Instant::now();
+			continue;
+		}
+
+		// 2. Handle WriteOp (time I/O)
 		let start = std::time::Instant::now();
-		file.write_all(&chunk)?;
-		stats.add_writer_io_time(start.elapsed().as_nanos() as u64);
-
-		// Track target bytes written
-		stats.add_target_written(chunk.len() as u64);
-
-		// Update global memory usage
-		global_memory.fetch_sub(chunk.len(), Ordering::SeqCst);
+		match op {
+			WriteOp::Data(chunk) => {
+				file.write_all(&chunk)?;
+				let chunk_len = chunk.len();
+				file_position += chunk_len as u64;
+				stats.add_writer_io_time(start.elapsed().as_nanos() as u64);
+				stats.add_target_written(chunk_len as u64);
+				global_memory.fetch_sub(chunk_len, Ordering::SeqCst);
+			}
+			WriteOp::Hole(size) => {
+				file.seek(SeekFrom::Current(size as i64))?;
+				file_position += size as u64;
+				stats.add_writer_io_time(start.elapsed().as_nanos() as u64);
+				stats.add_hole_bytes(size as u64);
+				global_memory.fetch_sub(size, Ordering::SeqCst);
+			}
+		}
 
 		// Reset for next iteration
 		recv_start = std::time::Instant::now();
 	}
+
+	if cancelled {
+		// Clean up cancelled file
+		drop(file);
+		if dst_path.exists() {
+			fs::remove_file(dst_path)?;
+		}
+		return Ok(());
+	}
+
+	// Set final file length to handle trailing holes
+	// (seeking past end of file doesn't set the file size until we write or set_len)
+	file.set_len(file_position)?;
 
 	Ok(())
 }

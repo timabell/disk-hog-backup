@@ -39,6 +39,9 @@ struct BackupStatsInner {
 	bytes_target_read: AtomicU64,
 	bytes_target_written: AtomicU64,
 	bytes_hashed: AtomicU64,
+	// Sparse file statistics
+	sparse_holes_count: AtomicU64, // Number of hole regions detected
+	sparse_hole_bytes: AtomicU64,  // Total bytes saved by sparse holes
 	/// Directory where stats file is stored (parent of backup set folder)
 	output_dir: PathBuf,
 	/// Session ID used for naming the stats file (e.g., "dhb-set-20260329-084109")
@@ -124,6 +127,8 @@ impl BackupStats {
 				bytes_target_read: AtomicU64::new(0),
 				bytes_target_written: AtomicU64::new(0),
 				bytes_hashed: AtomicU64::new(0),
+				sparse_holes_count: AtomicU64::new(0),
+				sparse_hole_bytes: AtomicU64::new(0),
 				output_dir,
 				session_id: session_id.to_string(),
 
@@ -188,6 +193,16 @@ impl BackupStats {
 	/// Track bytes that were hashed
 	pub fn add_hashed(&self, bytes: u64) {
 		self.inner.bytes_hashed.fetch_add(bytes, Ordering::Relaxed);
+	}
+
+	/// Track sparse file hole bytes (bytes not written due to zero detection)
+	pub fn add_hole_bytes(&self, bytes: u64) {
+		self.inner
+			.sparse_holes_count
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.sparse_hole_bytes
+			.fetch_add(bytes, Ordering::Relaxed);
 	}
 
 	/// Record that a file was hardlinked (no new data written)
@@ -435,6 +450,8 @@ impl BackupStats {
 		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
 		let bytes_target_written = self.inner.bytes_target_written.load(Ordering::Relaxed);
 		let bytes_hashed = self.inner.bytes_hashed.load(Ordering::Relaxed);
+		let sparse_holes_count = self.inner.sparse_holes_count.load(Ordering::Relaxed);
+		let sparse_hole_bytes = self.inner.sparse_hole_bytes.load(Ordering::Relaxed);
 
 		let files_new = self.inner.files_new.load(Ordering::Relaxed);
 		let files_size_changed = self.inner.files_size_changed.load(Ordering::Relaxed);
@@ -511,6 +528,18 @@ impl BackupStats {
 			),
 			format!("  Hashing: {} ({})", bytes_hashed, ByteSize(bytes_hashed)),
 		];
+
+		// Add sparse file statistics if any holes were detected
+		if sparse_holes_count > 0 {
+			lines.push(String::new());
+			lines.push("Sparse Files:".to_string());
+			lines.push(format!("  Holes detected: {}", sparse_holes_count));
+			lines.push(format!(
+				"  Bytes saved: {} ({})",
+				sparse_hole_bytes,
+				ByteSize(sparse_hole_bytes)
+			));
+		}
 
 		// Add pipeline stats
 		lines.extend(self.format_pipeline_stats(elapsed));

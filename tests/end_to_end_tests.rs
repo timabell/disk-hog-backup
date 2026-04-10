@@ -1289,6 +1289,262 @@ fn test_auto_delete_flag() -> io::Result<()> {
 	Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn test_sparse_file_preservation() -> io::Result<()> {
+	use std::io::{Seek, SeekFrom, Write};
+	use std::os::unix::fs::MetadataExt;
+
+	// Create source folder
+	let source = create_tmp_folder("sparse_source")?;
+
+	// Create a sparse file by writing data, seeking past a hole, then writing more data
+	let sparse_file_path = Path::new(&source).join("sparse.bin");
+	{
+		let mut file = fs::File::create(&sparse_file_path)?;
+		// Write 4KB of data at the start
+		file.write_all(&[0xAA; 4096])?;
+		// Seek past 1MB hole (don't write zeros)
+		file.seek(SeekFrom::Current(1024 * 1024))?;
+		// Write 4KB of data after the hole
+		file.write_all(&[0xBB; 4096])?;
+	}
+
+	// Verify source file is sparse
+	let src_metadata = fs::metadata(&sparse_file_path)?;
+	let src_apparent_size = src_metadata.len();
+	let src_blocks = src_metadata.blocks();
+	let src_actual_size = src_blocks * 512;
+
+	assert_eq!(
+		src_apparent_size,
+		4096 + 1024 * 1024 + 4096,
+		"Source apparent size should be 4KB + 1MB + 4KB"
+	);
+	assert!(
+		src_actual_size < src_apparent_size,
+		"Source file should be sparse (actual {} < apparent {})",
+		src_actual_size,
+		src_apparent_size
+	);
+
+	// Create backup destination
+	let backup_root = create_tmp_folder("sparse_backups")?;
+
+	// Run backup
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the backup set
+	let backup_sets = get_backup_sets(&backup_root)?;
+	let backup_set = backup_sets
+		.first()
+		.expect("Should have created a backup set");
+
+	// Verify backup file exists and content matches
+	let backed_up_file = backup_set.path().join("sparse.bin");
+	assert!(backed_up_file.exists(), "Backup file should exist");
+
+	// Verify content matches
+	let src_content = fs::read(&sparse_file_path)?;
+	let dst_content = fs::read(&backed_up_file)?;
+	assert_eq!(src_content, dst_content, "File content should match");
+
+	// Verify backup file is also sparse
+	let dst_metadata = fs::metadata(&backed_up_file)?;
+	let dst_apparent_size = dst_metadata.len();
+	let dst_blocks = dst_metadata.blocks();
+	let dst_actual_size = dst_blocks * 512;
+
+	assert_eq!(
+		dst_apparent_size, src_apparent_size,
+		"Backup apparent size should match source"
+	);
+	assert!(
+		dst_actual_size < dst_apparent_size,
+		"Backup file should be sparse (actual {} < apparent {})",
+		dst_actual_size,
+		dst_apparent_size
+	);
+
+	// Verify hole was preserved (not just any sparse file, but similar sparseness)
+	// Allow some variance due to filesystem block size differences
+	let sparseness_ratio = dst_actual_size as f64 / src_actual_size as f64;
+	assert!(
+		sparseness_ratio < 2.0,
+		"Backup sparseness should be similar to source (ratio: {})",
+		sparseness_ratio
+	);
+
+	Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sparse_file_trailing_zeros() -> io::Result<()> {
+	// Test that files with trailing zeros (hole at end) are handled correctly
+	use std::io::{Seek, SeekFrom, Write};
+	use std::os::unix::fs::MetadataExt;
+
+	let source = create_tmp_folder("sparse_trailing_source")?;
+
+	// Create file with data followed by trailing hole
+	let sparse_file_path = Path::new(&source).join("trailing_sparse.bin");
+	{
+		let mut file = fs::File::create(&sparse_file_path)?;
+		// Write 4KB of data at the start
+		file.write_all(&[0xCC; 4096])?;
+		// Seek to create 512KB trailing hole
+		file.seek(SeekFrom::Current(512 * 1024))?;
+		// Set file length without writing (creates trailing hole)
+		file.set_len(4096 + 512 * 1024)?;
+	}
+
+	// Verify source is sparse with correct size
+	let src_metadata = fs::metadata(&sparse_file_path)?;
+	let expected_size = 4096 + 512 * 1024;
+	assert_eq!(src_metadata.len(), expected_size as u64);
+	assert!(
+		src_metadata.blocks() * 512 < src_metadata.len(),
+		"Source should be sparse"
+	);
+
+	let backup_root = create_tmp_folder("sparse_trailing_backups")?;
+
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	let backup_sets = get_backup_sets(&backup_root)?;
+	let backup_set = backup_sets.first().expect("Should have a backup set");
+	let backed_up_file = backup_set.path().join("trailing_sparse.bin");
+
+	// Verify backup has correct file size (trailing hole preserved)
+	let dst_metadata = fs::metadata(&backed_up_file)?;
+	assert_eq!(
+		dst_metadata.len(),
+		expected_size as u64,
+		"Backup file size should match (trailing hole preserved)"
+	);
+
+	// Verify content matches
+	let src_content = fs::read(&sparse_file_path)?;
+	let dst_content = fs::read(&backed_up_file)?;
+	assert_eq!(src_content, dst_content, "File content should match");
+
+	// Verify backup is sparse
+	assert!(
+		dst_metadata.blocks() * 512 < dst_metadata.len(),
+		"Backup should be sparse"
+	);
+
+	Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sparse_file_all_zeros() -> io::Result<()> {
+	// Test that a file entirely of zeros becomes sparse in backup
+	use std::os::unix::fs::MetadataExt;
+
+	let source = create_tmp_folder("sparse_zeros_source")?;
+
+	// Create a file of all zeros (64KB)
+	let zeros_file_path = Path::new(&source).join("all_zeros.bin");
+	fs::write(&zeros_file_path, vec![0u8; 64 * 1024])?;
+
+	// Note: The source file won't be sparse since we wrote zeros
+	// But the backup should be sparse since we detect zero blocks
+
+	let backup_root = create_tmp_folder("sparse_zeros_backups")?;
+
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	let backup_sets = get_backup_sets(&backup_root)?;
+	let backup_set = backup_sets.first().expect("Should have a backup set");
+	let backed_up_file = backup_set.path().join("all_zeros.bin");
+
+	let dst_metadata = fs::metadata(&backed_up_file)?;
+
+	// Verify file size is correct
+	assert_eq!(dst_metadata.len(), 64 * 1024, "File size should be 64KB");
+
+	// Verify backup is sparse (all zeros detected and written as hole)
+	assert!(
+		dst_metadata.blocks() * 512 < dst_metadata.len(),
+		"Backup of all-zeros file should be sparse (blocks: {}, apparent: {})",
+		dst_metadata.blocks() * 512,
+		dst_metadata.len()
+	);
+
+	// Verify content is all zeros
+	let content = fs::read(&backed_up_file)?;
+	assert!(
+		content.iter().all(|&b| b == 0),
+		"Content should be all zeros"
+	);
+
+	Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_non_sparse_file_unchanged() -> io::Result<()> {
+	// Test that files with no zeros are backed up normally (no regression)
+
+	let source = create_tmp_folder("non_sparse_source")?;
+
+	// Create a file with no zeros (random-ish data)
+	let data: Vec<u8> = (0..64 * 1024)
+		.map(|i| ((i * 7 + 13) % 255 + 1) as u8)
+		.collect();
+	let file_path = Path::new(&source).join("no_zeros.bin");
+	fs::write(&file_path, &data)?;
+
+	let backup_root = create_tmp_folder("non_sparse_backups")?;
+
+	disk_hog_backup_cmd()
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	let backup_sets = get_backup_sets(&backup_root)?;
+	let backup_set = backup_sets.first().expect("Should have a backup set");
+	let backed_up_file = backup_set.path().join("no_zeros.bin");
+
+	// Verify content matches exactly
+	let backed_up_content = fs::read(&backed_up_file)?;
+	assert_eq!(data, backed_up_content, "Content should match exactly");
+
+	// File without zeros should not be sparse
+	let dst_metadata = fs::metadata(&backed_up_file)?;
+	assert_eq!(dst_metadata.len(), 64 * 1024, "File size should be 64KB");
+
+	// With no zero blocks, file should not be sparse
+	// (blocks * 512 should be >= file size, accounting for filesystem overhead)
+	// We don't assert non-sparseness as some filesystems may compress, but content must match
+
+	Ok(())
+}
+
 #[test]
 fn test_interrupted_backup_leaves_wip_folder() -> io::Result<()> {
 	// Test that an interrupted backup leaves a wip_ folder (not renamed to final name).
