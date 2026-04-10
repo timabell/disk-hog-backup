@@ -209,17 +209,40 @@ pub fn copy_file_with_streaming(
 
 	let previous_file = get_matching_previous_file(prev_path, rel_path, context)?;
 
-	let (hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
+	let (mut hardlinked, src_hash) = stream_with_unified_pipeline(StreamPipelineArgs {
 		src_path,
 		dst_path,
 		previous_file: previous_file.as_ref(),
 		stats: &context.stats,
 	})?;
 
+	// Check for moved/renamed files: if not hardlinked and no previous file at same path,
+	// look up by hash in the reverse index to find if this file existed elsewhere
+	let mut moved_from: Option<PathBuf> = None;
+	if !hardlinked
+		&& previous_file.is_none()
+		&& let Some(prev_md5_store) = &context.prev_md5_store
+		&& let Some(prev_rel_path) = prev_md5_store.find_path_by_hash(&src_hash)
+		&& let Some(prev_backup_path) = &context.prev_backup_path
+	{
+		let prev_full_path = prev_backup_path.join(prev_rel_path);
+		if prev_full_path.exists() && !prev_full_path.is_dir() {
+			// Remove the copied file and create hardlink instead
+			fs::remove_file(dst_path)?;
+			create_hardlink(&prev_full_path, dst_path)?;
+			hardlinked = true;
+			moved_from = Some(prev_rel_path.clone());
+		}
+	}
+
 	context.new_md5_store.add_hash(rel_path, src_hash);
 
 	if hardlinked {
-		context.stats.add_file_hardlinked(file_size);
+		if moved_from.is_some() {
+			context.stats.add_file_hardlinked_moved(file_size);
+		} else {
+			context.stats.add_file_hardlinked(file_size);
+		}
 	} else {
 		copy_file_metadata(src_path, dst_path, &context.stats)?;
 		context.stats.add_file_copied(file_size);
@@ -227,7 +250,14 @@ pub fn copy_file_with_streaming(
 
 	// Clear progress line, print log, then update progress
 	context.stats.clear_progress_line();
-	if hardlinked {
+	if let Some(old_path) = &moved_from {
+		eprintln!(
+			"  Hardlinked: {} (same content as {}, MD5: {})",
+			dst_path.display(),
+			old_path.display(),
+			format_md5_hash(src_hash)
+		);
+	} else if hardlinked {
 		eprintln!(
 			"  Hardlinked: {} (MD5: {})",
 			dst_path.display(),

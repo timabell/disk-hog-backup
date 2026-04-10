@@ -18,8 +18,15 @@ where
 	)
 }
 
-/// Generate a backup set name using the current time
+/// Generate a backup set name using the current time.
+/// For testing, set DHB_TEST_TIMESTAMP env var to an RFC3339 timestamp
+/// (e.g., "2025-01-01T00:00:00Z") to use a fixed time instead.
 pub fn generate_backup_set_name() -> String {
+	if let Ok(timestamp) = std::env::var("DHB_TEST_TIMESTAMP")
+		&& let Ok(time) = chrono::DateTime::parse_from_rfc3339(&timestamp)
+	{
+		return generate_name(|| time.with_timezone(&Utc));
+	}
 	generate_name(Utc::now)
 }
 

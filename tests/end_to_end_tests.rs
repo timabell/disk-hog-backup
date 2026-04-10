@@ -4,7 +4,6 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::thread;
 use std::time;
 
 #[test]
@@ -460,8 +459,9 @@ fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Err
 	// Create backup destination
 	let backup_root = create_tmp_folder("backups")?;
 
-	// Run first backup
+	// First backup
 	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-25T23:45:55Z")
 		.arg("--source")
 		.arg(&source)
 		.arg("--destination")
@@ -490,11 +490,9 @@ fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Err
 	let modified_content = "This is file 1 with modified content";
 	create_test_file(&source, file1, modified_content)?;
 
-	// Add a delay to ensure different timestamps for backup sets
-	thread::sleep(time::Duration::from_secs(2));
-
-	// Run second backup
+	// Second backup
 	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-26T14:30:22Z")
 		.arg("--source")
 		.arg(&source)
 		.arg("--destination")
@@ -502,12 +500,10 @@ fn test_hardlinking_in_second_backup_set() -> Result<(), Box<dyn std::error::Err
 		.assert()
 		.success();
 
-	// Find the second backup set (should be the newest one)
+	// Find the second backup set
 	let mut backup_sets = get_backup_sets(&backup_root)?;
 	assert_eq!(backup_sets.len(), 2, "Should now have two backup sets");
-
-	// Sort backup sets by creation time to find the newest one
-	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().created().unwrap());
+	backup_sets.sort_by_key(|entry| entry.file_name());
 	let second_backup_set = &backup_sets[1];
 
 	// Get paths to the second backup files
@@ -930,6 +926,7 @@ Backup Set Stats:
   Mtime changed:    0
   Content changed:  0
   Hardlinked:       0 files, 0 B
+  Hardlinked (dedup): 0 files, 0 B
   Copied:           1 files, 12 B
   Total:            1 files, 12 B
 
@@ -1071,16 +1068,15 @@ fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
 	// Create backup destination
 	let backup_root = create_tmp_folder("hardlink_opt_backups")?;
 
-	// Run first backup
+	// First backup
 	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-28T08:15:33Z")
 		.arg("--source")
 		.arg(&source)
 		.arg("--destination")
 		.arg(&backup_root)
 		.assert()
 		.success();
-
-	thread::sleep(time::Duration::from_secs(2));
 
 	// Modify files in different ways
 	// unchanged.txt - leave alone (should be trusted via mtime)
@@ -1093,8 +1089,9 @@ fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
 	// content_change.txt - change content same length (should increment mtime_changed and content_changed)
 	create_test_file(&source, "content_change.txt", "MODIFIED")?;
 
-	// Run second backup
+	// Second backup
 	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-29T19:42:11Z")
 		.arg("--source")
 		.arg(&source)
 		.arg("--destination")
@@ -1104,7 +1101,7 @@ fn test_hardlinking_optimization() -> Result<(), Box<dyn std::error::Error>> {
 
 	// Get second backup stats
 	let mut backup_sets = get_backup_sets(&backup_root)?;
-	backup_sets.sort_by_key(|entry| entry.path().metadata().unwrap().modified().unwrap());
+	backup_sets.sort_by_key(|entry| entry.file_name());
 	// Stats file is in parent directory, named after backup folder
 	let backup_set_path = backup_sets[1].path();
 	let backup_set_name = backup_set_path.file_name().unwrap().to_string_lossy();
@@ -1176,6 +1173,83 @@ fn test_disk_space_reporting() -> io::Result<()> {
 		"Should report available disk space"
 	);
 	assert!(stderr.contains("Used:"), "Should report used disk space");
+
+	Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_hardlink_for_moved_file() -> Result<(), Box<dyn std::error::Error>> {
+	// When a file is moved/renamed between backups, it should be hardlinked
+	// to the previous backup's version (same content, different path)
+
+	let source = create_tmp_folder("moved_file_source")?;
+	let backup_root = create_tmp_folder("moved_file_backups")?;
+
+	// Create a file at original location
+	let original_content = "This file will be moved";
+	create_test_file(&source, "original/file.txt", original_content)?;
+
+	// First backup
+	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-30T06:22:48Z")
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Get the first backup set path
+	let backup_sets = get_backup_sets(&backup_root)?;
+	assert_eq!(backup_sets.len(), 1, "Should have exactly one backup set");
+	let first_backup = backup_sets[0].path();
+	let first_backup_file = first_backup.join("original/file.txt");
+	assert!(first_backup_file.exists(), "First backup file should exist");
+
+	// Move the file in source (rename path, same content)
+	fs::create_dir_all(Path::new(&source).join("new_location"))?;
+	fs::rename(
+		Path::new(&source).join("original/file.txt"),
+		Path::new(&source).join("new_location/renamed.txt"),
+	)?;
+	fs::remove_dir(Path::new(&source).join("original"))?;
+
+	// Second backup
+	disk_hog_backup_cmd()
+		.env("DHB_TEST_TIMESTAMP", "2025-12-31T21:08:17Z")
+		.arg("--source")
+		.arg(&source)
+		.arg("--destination")
+		.arg(&backup_root)
+		.assert()
+		.success();
+
+	// Find the second backup set
+	let mut backup_sets = get_backup_sets(&backup_root)?;
+	backup_sets.sort_by_key(|entry| entry.file_name());
+	assert_eq!(backup_sets.len(), 2, "Should have exactly two backup sets");
+	let second_backup = backup_sets[1].path();
+	let second_backup_file = second_backup.join("new_location/renamed.txt");
+
+	// Verify the moved file exists with correct content
+	assert!(
+		second_backup_file.exists(),
+		"Moved file should exist in second backup"
+	);
+	assert_eq!(
+		fs::read_to_string(&second_backup_file)?,
+		original_content,
+		"Content should match"
+	);
+
+	// Verify the file is hardlinked to the first backup (same inode = same physical file)
+	let first_inode = get_inode(&first_backup_file)?;
+	let second_inode = get_inode(&second_backup_file)?;
+	assert_eq!(
+		first_inode, second_inode,
+		"Moved file should be hardlinked (same inode) to previous backup - content matches, just path changed"
+	);
 
 	Ok(())
 }

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 pub struct Md5Store {
 	hashes: HashMap<PathBuf, [u8; 16]>,
+	/// Reverse index for finding files by content hash (for detecting moved files)
+	hash_to_path: HashMap<[u8; 16], PathBuf>,
 	/// Directory where MD5 files are stored (parent of backup set folder)
 	output_dir: PathBuf,
 	/// Session ID used for naming the MD5 file (e.g., "dhb-set-20260329-084109")
@@ -37,6 +39,7 @@ impl Md5Store {
 			.to_path_buf();
 		Md5Store {
 			hashes: HashMap::new(),
+			hash_to_path: HashMap::new(),
 			output_dir,
 			session_id: session_id.to_string(),
 		}
@@ -57,6 +60,7 @@ impl Md5Store {
 
 		let mut store = Md5Store {
 			hashes: HashMap::new(),
+			hash_to_path: HashMap::new(),
 			output_dir,
 			session_id: folder_name,
 		};
@@ -74,6 +78,7 @@ impl Md5Store {
 				}
 
 				if let Some((hash, path)) = Self::parse_md5_line(&line) {
+					store.hash_to_path.insert(hash, path.clone());
 					store.hashes.insert(path, hash);
 				}
 			}
@@ -134,6 +139,11 @@ impl Md5Store {
 	/// Returns the path where the MD5 file will be saved.
 	pub fn md5_file_path(&self) -> PathBuf {
 		self.output_dir.join(format!("{}.md5", self.session_id))
+	}
+
+	/// Find a path that has the given hash (for detecting moved/renamed files)
+	pub fn find_path_by_hash(&self, hash: &[u8; 16]) -> Option<&PathBuf> {
+		self.hash_to_path.get(hash)
 	}
 }
 
@@ -425,5 +435,37 @@ mod tests {
 			Some(&hash3),
 			"Failed to find hash for path with carriage returns"
 		);
+	}
+
+	#[test]
+	fn test_find_path_by_hash() {
+		let temp_dir = tempdir().unwrap();
+		let backup_path = temp_dir.path().join("dhb-set-test");
+		std::fs::create_dir(&backup_path).unwrap();
+
+		let mut store = Md5Store::new(&backup_path, "dhb-set-test");
+
+		let hash1 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+		let hash2 = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+
+		store.add_hash(Path::new("file1.txt"), hash1);
+		store.add_hash(Path::new("dir/file2.txt"), hash2);
+
+		store.save().unwrap();
+
+		// Load and verify reverse lookup works
+		let loaded_store = Md5Store::load_from_backup(&backup_path).unwrap();
+
+		assert_eq!(
+			loaded_store.find_path_by_hash(&hash1),
+			Some(&PathBuf::from("file1.txt"))
+		);
+		assert_eq!(
+			loaded_store.find_path_by_hash(&hash2),
+			Some(&PathBuf::from("dir/file2.txt"))
+		);
+
+		let unknown_hash = [0u8; 16];
+		assert_eq!(loaded_store.find_path_by_hash(&unknown_hash), None);
 	}
 }

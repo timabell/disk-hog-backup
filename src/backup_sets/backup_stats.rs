@@ -29,6 +29,8 @@ struct BackupStatsInner {
 	files_copied: AtomicUsize,
 	bytes_hardlinked: AtomicU64,
 	bytes_copied: AtomicU64,
+	files_hardlinked_moved: AtomicUsize, // hardlinked from different path (moved/renamed)
+	bytes_hardlinked_moved: AtomicU64,
 	files_new: AtomicUsize,           // new file, no previous backup
 	files_size_changed: AtomicUsize,  // size changed, no previous file to compare
 	files_mtime_changed: AtomicUsize, // mtime changed, had to check hash
@@ -112,6 +114,8 @@ impl BackupStats {
 				files_copied: AtomicUsize::new(0),
 				bytes_hardlinked: AtomicU64::new(0),
 				bytes_copied: AtomicU64::new(0),
+				files_hardlinked_moved: AtomicUsize::new(0),
+				bytes_hardlinked_moved: AtomicU64::new(0),
 				files_new: AtomicUsize::new(0),
 				files_size_changed: AtomicUsize::new(0),
 				files_mtime_changed: AtomicUsize::new(0),
@@ -194,6 +198,16 @@ impl BackupStats {
 			.fetch_add(file_size, Ordering::Relaxed);
 	}
 
+	/// Record that a file was hardlinked from a different path (moved/renamed)
+	pub fn add_file_hardlinked_moved(&self, file_size: u64) {
+		self.inner
+			.files_hardlinked_moved
+			.fetch_add(1, Ordering::Relaxed);
+		self.inner
+			.bytes_hardlinked_moved
+			.fetch_add(file_size, Ordering::Relaxed);
+	}
+
 	/// Record that a file was copied (new data written)
 	pub fn add_file_copied(&self, file_size: u64) {
 		self.inner.files_copied.fetch_add(1, Ordering::Relaxed);
@@ -227,10 +241,11 @@ impl BackupStats {
 			.fetch_add(1, Ordering::Relaxed);
 	}
 
-	/// Get total number of files processed (copied + hardlinked)
+	/// Get total number of files processed (copied + hardlinked + hardlinked_moved)
 	pub fn files_processed(&self) -> usize {
 		self.inner.files_copied.load(Ordering::Relaxed)
 			+ self.inner.files_hardlinked.load(Ordering::Relaxed)
+			+ self.inner.files_hardlinked_moved.load(Ordering::Relaxed)
 	}
 
 	/// Get the current elapsed time since backup started
@@ -407,12 +422,14 @@ impl BackupStats {
 
 		// Load all values
 		let files_hardlinked = self.inner.files_hardlinked.load(Ordering::Relaxed);
+		let files_hardlinked_moved = self.inner.files_hardlinked_moved.load(Ordering::Relaxed);
 		let files_copied = self.inner.files_copied.load(Ordering::Relaxed);
-		let files_total = files_hardlinked + files_copied;
+		let files_total = files_hardlinked + files_hardlinked_moved + files_copied;
 
 		let bytes_hardlinked = self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+		let bytes_hardlinked_moved = self.inner.bytes_hardlinked_moved.load(Ordering::Relaxed);
 		let bytes_copied = self.inner.bytes_copied.load(Ordering::Relaxed);
-		let bytes_total = bytes_hardlinked + bytes_copied;
+		let bytes_total = bytes_hardlinked + bytes_hardlinked_moved + bytes_copied;
 
 		let bytes_source_read = self.inner.bytes_source_read.load(Ordering::Relaxed);
 		let bytes_target_read = self.inner.bytes_target_read.load(Ordering::Relaxed);
@@ -459,6 +476,11 @@ impl BackupStats {
 				"  Hardlinked:       {} files, {}",
 				files_hardlinked,
 				ByteSize(bytes_hardlinked)
+			),
+			format!(
+				"  Hardlinked (dedup): {} files, {}",
+				files_hardlinked_moved,
+				ByteSize(bytes_hardlinked_moved)
 			),
 			format!(
 				"  Copied:           {} files, {}",
@@ -805,7 +827,8 @@ impl BackupStats {
 		}
 
 		let processed = self.inner.bytes_copied.load(Ordering::Relaxed)
-			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed);
+			+ self.inner.bytes_hardlinked.load(Ordering::Relaxed)
+			+ self.inner.bytes_hardlinked_moved.load(Ordering::Relaxed);
 
 		eprint!(
 			"{}",
