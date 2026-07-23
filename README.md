@@ -27,6 +27,34 @@ Please report any issues encountered at <https://github.com/timabell/disk-hog-ba
 
 It is recommended to follow at a minimum the [3-2-1 backup rule](https://en.wikipedia.org/wiki/Backup#3-2-1_Backup_Rule) to ensure the failure of a single source/backup cannot result in complete data loss, regardless of the backup tools you choose.
 
+# Installation
+
+## Nix flake
+
+A Nix flake wrapping the prebuilt release binary lives on the [`nix` branch](https://github.com/timabell/disk-hog-backup/tree/nix) of this repo. It's auto-updated whenever a release is published.
+
+Run without installing:
+
+```sh
+nix run github:timabell/disk-hog-backup/nix -- --help
+```
+
+Install into your profile:
+
+```sh
+nix profile install github:timabell/disk-hog-backup/nix
+```
+
+Reference from a NixOS / home-manager flake:
+
+```nix
+inputs.disk-hog-backup.url = "github:timabell/disk-hog-backup/nix";
+# then add to environment.systemPackages / home.packages:
+#   disk-hog-backup.packages.${pkgs.system}.default
+```
+
+The release binary is statically linked (musl), so it runs on NixOS without patching. Supported system: `x86_64-linux`.
+
 # Usage
 
 ```
